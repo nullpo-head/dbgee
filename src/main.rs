@@ -201,7 +201,7 @@ fn build_debugger_command(debugger_opt: &str, debuggee_pid: unistd::Pid) -> Vec<
         command => vec![
             "sh".to_string(),
             "-c".to_string(),
-            command.to_string() + debuggee_pid.as_raw().to_string().as_str(),
+            command.to_string() + " " + debuggee_pid.as_raw().to_string().as_str(),
         ],
     }
 }
