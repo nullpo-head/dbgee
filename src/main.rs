@@ -12,22 +12,67 @@ use nix::unistd;
 use structopt::StructOpt;
 use strum::{EnumString, EnumVariantNames, VariantNames as _};
 
-/// Exec the given command and attach a debugger to it.
+/// Launches the given command and attaches a debugger to it.
 #[derive(Debug, StructOpt)]
 #[structopt(name = "active_attach")]
-struct Opt {
+enum Opts {
+    Run(RunOpts),
+    Set(SetOpts),
+    Unset(UnsetOpts),
+}
+
+/// Launches the debuggee, and attaches the specified debugger to it.
+#[derive(Debug, StructOpt)]
+#[structopt(usage = "active_attach run [OPTIONS] -- <debuggee> [args-for-debuggee]...")]
+struct RunOpts {
+    /// Path to the debuggee process
     #[structopt(name = "debuggee")]
     pub debuggee: String,
 
     #[structopt(name = "args")]
     pub debuggee_args: Vec<String>,
 
+    #[structopt(flatten)]
+    attach_opts: AttachOpts,
+}
+
+/// Replaces the debuggee with a wrapper script, so that the debugger will be attached to it whenever 
+/// it is launched by any processes from now on.
+///
+/// Please run "unset" command to restore the original debuggee if you don't want to attach debuggers anymore.
+/// Or, if you give start_cmd, active_attach automatically does "unset" after start_cmd finishes.
+#[derive(Debug, StructOpt)]
+#[structopt(usage = "active_attach set [OPTIONS] <debuggee>  [-- <run_cmd> [args-for-debuggee]...]")]
+struct SetOpts {
+    /// Path to the debuggee process
+    #[structopt(name = "debuggee")]
+    pub debuggee: String,
+
+    /// If start_cmd is given, active_attach launches start_cmd, and automatically unsets after
+    /// start_cmd finishes
+    #[structopt(name = "start_cmd")]
+    pub start_cmd: Vec<String>,
+
+    #[structopt(flatten)]
+    attach_opts: AttachOpts,
+}
+
+/// Removes the wrapper script which "set" put, and restores the original debuggee file.
+#[derive(Debug, StructOpt)]
+struct UnsetOpts {
+    /// Path to the debuggee process
+    #[structopt(name = "debuggee")]
+    pub debuggee: String,
+}
+
+#[derive(Debug, StructOpt)]
+struct AttachOpts {
     /// Action to take after the debuggee launces.
     ///
-    /// tmux (default): Open a new tmux window in last active tmux session, launch a debugger there, and have the debugger attach the debuggee.
+    /// tmux (default): Opens a new tmux window in last active tmux session, launches a debugger there, and has the debugger attach the debuggee.
     /// If there is no active tmux session, it launches a new session in the background, and writes a notification to stderr (as far as stderr is a tty).
     ///
-    /// write-pid: Stop the debuggee and print the debuggee's PID.
+    /// write-pid: Stops the debuggee, and prints the debuggee's PID.
     /// active_attach writes the PID to /tmp/active_attach_pid
     /// If stderr is a tty, active_attach outputs the PID to stderr as well.
     #[structopt(
@@ -36,10 +81,10 @@ struct Opt {
         possible_values(AttachAction::VARIANTS),
         default_value("tmux")
     )]
-    pub attach_action: AttachAction,
+        pub action: AttachAction,
 
-    /// Debugger to launch. Choose "gdb" or "dlv", or you can specify an arbitrary command line. The debuggee's PID follows your command line as an argument.
-    #[structopt(short = "d", long = "debugger", default_value("gdb"))]
+        /// Debugger to launch. Choose "gdb" or "dlv", or you can specify an arbitrary command line. The debuggee's PID follows your command line as an argument.
+        #[structopt(short = "d", long = "debugger", default_value("gdb"))]
     pub debugger: String,
 }
 
@@ -51,26 +96,29 @@ pub enum AttachAction {
 }
 
 fn main() {
-    let app = Opt::clap().usage("active_attach [OPTIONS] -- debuggee [args-for-debuggee...]");
-    let matches = app.get_matches();
-    let opts = Opt::from_clap(&matches);
+    let opts = Opts::from_args();
 
-    let debuggee_pid = nix::unistd::getpid();
-    let debuggee_cmd: Vec<&String> = vec![&opts.debuggee]
-        .into_iter()
-        .chain(opts.debuggee_args.iter())
-        .collect();
+    if let Opts::Run(run_opts) = opts {
+        let debuggee_pid = nix::unistd::getpid();
+        let debuggee_cmd: Vec<&String> = vec![&run_opts.debuggee]
+            .into_iter()
+            .chain(run_opts.debuggee_args.iter())
+            .collect();
 
-    // After fork_exec_stop, the child process continues main function.
-    // The original active_attach process, which has debuggee_pid, does execve and never returns.
-    fork_exec_stop(debuggee_pid, &debuggee_cmd);
+        // After fork_exec_stop, the child process continues main function.
+        // The original active_attach process, which has debuggee_pid, does execve and never returns.
+        fork_exec_stop(debuggee_pid, &debuggee_cmd);
 
-    match opts.attach_action {
-        AttachAction::WritePid => {
-            let _ = write_pid(debuggee_pid);
-        }
-        AttachAction::Tmux => {
-            launch_debugger_in_tmux(&build_debugger_command(&opts.debugger, debuggee_pid));
+        match run_opts.attach_opts.action {
+            AttachAction::WritePid => {
+                let _ = write_pid(debuggee_pid);
+            }
+            AttachAction::Tmux => {
+                launch_debugger_in_tmux(&build_debugger_command(
+                        &run_opts.attach_opts.debugger,
+                        debuggee_pid,
+                ));
+            }
         }
     }
 }
@@ -128,7 +176,7 @@ fn fork_exec_stop<T: AsRef<str>>(debuggee_pid: unistd::Pid, debuggee_cmd: &[T]) 
 
             ptrace::detach(debuggee_pid, nix::sys::signal::SIGSTOP)
                 .expect("detach and stop failed");
-        }
+            }
     }
 }
 
@@ -138,8 +186,8 @@ fn write_pid(debuggee_pid: unistd::Pid) -> Result<(), Error> {
             To do I/O with the debuggee, run `fg` in your shell to bring it to the foreground",
     );
     print_message(&format!(
-        "PID: {}. It's also written to /tmp/active_attach_pid as a plain text number.",
-        debuggee_pid.as_raw()
+            "PID: {}. It's also written to /tmp/active_attach_pid as a plain text number.",
+            debuggee_pid.as_raw()
     ));
     let mut pid_file = File::create("/tmp/active_attach_pid")?;
     write!(pid_file, "{}", debuggee_pid.as_raw())
@@ -163,7 +211,7 @@ fn launch_debugger_in_tmux<T: AsRef<str>>(debugger_cmd: &[T]) {
             .spawn()
             .unwrap_or_else(|_| {
                 panic!(message_string(
-                    "Failed to open a new tmux window for an unexpected reason."
+                        "Failed to open a new tmux window for an unexpected reason."
                 ))
             });
     } else {
@@ -176,7 +224,7 @@ fn launch_debugger_in_tmux<T: AsRef<str>>(debugger_cmd: &[T]) {
             .spawn()
             .unwrap_or_else(|_| {
                 panic!(message_string(
-                    "Failed to open a new tmux session for an unexpected reason."
+                        "Failed to open a new tmux session for an unexpected reason."
                 ))
             });
         print_message("the debugger has launched in a new tmux session. Try `tmux a` to attach.");
