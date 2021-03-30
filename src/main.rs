@@ -24,7 +24,7 @@ use strum::{EnumString, EnumVariantNames, VariantNames as _};
 
 /// Launches the given command and attaches a debugger to it.
 #[derive(Debug, StructOpt)]
-#[structopt(name = "active_attach")]
+#[structopt(name = "dbgee", about = "the active debuggee")]
 enum Opts {
     Run(RunOpts),
     Set(SetOpts),
@@ -34,7 +34,7 @@ enum Opts {
 /// Launches the debuggee, and attaches the specified debugger to it.
 #[derive(Debug, StructOpt)]
 #[structopt(
-    usage = "active_attach run [OPTIONS] -- <debuggee> [args-for-debuggee]...",
+    usage = "dbgee run [OPTIONS] -- <debuggee> [args-for-debuggee]...",
     rename_all = "kebab"
 )]
 struct RunOpts {
@@ -55,10 +55,10 @@ const SETOPTS_POSITIONAL_ARGS: [&str; 2] = ["debuggee", "start-cmd"];
 /// it is launched by any processes from now on.
 ///
 /// Please run "unset" command to restore the original debuggee if you don't want to attach debuggers anymore.
-/// Or, if you give start_cmd, active_attach automatically does "unset" after start_cmd finishes.
+/// Or, if you give start_cmd, dbgee automatically does "unset" after start_cmd finishes.
 #[derive(Debug, StructOpt)]
 #[structopt(
-    usage = "active_attach set [OPTIONS] <debuggee>  [-- <run_cmd> [args-for-debuggee]...]",
+    usage = "dbgee set [OPTIONS] <debuggee>  [-- <run_cmd> [args-for-debuggee]...]",
     rename_all = "kebab"
 )]
 struct SetOpts {
@@ -66,7 +66,7 @@ struct SetOpts {
     #[structopt()]
     pub debuggee: String,
 
-    /// If start_cmd is given, active_attach launches start_cmd, and automatically unsets after
+    /// If start_cmd is given, dbgee launches start_cmd, and automatically unsets after
     /// start_cmd finishes
     #[structopt()]
     pub start_cmd: Vec<String>,
@@ -92,8 +92,8 @@ struct AttachOpts {
     /// If there is no active tmux session, it launches a new session in the background, and writes a notification to stderr (as far as stderr is a tty).
     ///
     /// write-pid: Stops the debuggee, and prints the debuggee's PID.
-    /// active_attach writes the PID to /tmp/active_attach_pid
-    /// If stderr is a tty, active_attach outputs the PID to stderr as well.
+    /// dbgee writes the PID to /tmp/dbgee_pid
+    /// If stderr is a tty, dbgee outputs the PID to stderr as well.
     #[structopt(
         short,
         long,
@@ -170,7 +170,7 @@ fn unset_debuggee(unset_opts: UnsetOpts) -> Result<()> {
 fn wrap_debuggee_binary(debuggee: &str, run_command: &str) -> Result<()> {
     if check_if_wrapped(debuggee) {
         bail!(
-            "{} is already wrapped by active_attach. Did you set it already?",
+            "{} is already wrapped by dbgee. Did you set it already?",
             debuggee
         );
     }
@@ -208,7 +208,7 @@ fn unwrap_debuggee_binary(debuggee: &str) -> Result<()> {
 
     if !check_if_wrapped(debuggee) {
         bail!(
-            "{} is not wrapped by active_attach. Did you unset it already?",
+            "{} is not wrapped by dbgee. Did you unset it already?",
             debuggee
         );
     }
@@ -253,7 +253,7 @@ fn check_if_wrapped<P: AsRef<Path>>(path: P) -> bool {
 
 fn build_run_command(set_opts: &ArgMatches) -> Result<String> {
     let self_pathbuf = env::current_exe()?;
-    let self_path = get_valid_executable_path(&self_pathbuf, "active_attach")?;
+    let self_path = get_valid_executable_path(&self_pathbuf, "dbgee")?;
     let global_opts = reconstruct_flags(set_opts, &[]);
     let attach_opts = reconstruct_flags(
         set_opts.subcommand_matches("set").unwrap(),
@@ -305,11 +305,9 @@ fn get_valid_executable_path<T: AsRef<Path>>(path: T, name: &str) -> Result<Stri
     let abspath = get_abspath(path, name)?;
     let path = Path::new(&abspath);
     let metadata = path.metadata()?;
+    // TODO: more fine-grained permission check
     if !metadata.is_file() && (metadata.permissions().mode() & 0o111 != 0) {
-        return Err(anyhow!(
-            "{}",
-            message_string(format!("{}({}) is not executable", name, abspath))
-        ));
+        bail!("{} ({}) is not executable", name, abspath);
     }
     Ok(abspath)
 }
@@ -400,10 +398,10 @@ fn write_pid(debuggee_pid: unistd::Pid) -> Result<()> {
             To do I/O with the debuggee, run `fg` in your shell to bring it to the foreground",
     );
     print_message(&format!(
-        "PID: {}. It's also written to /tmp/active_attach_pid as a plain text number.",
+        "PID: {}. It's also written to /tmp/dbgee_pid as a plain text number.",
         debuggee_pid.as_raw()
     ));
-    let mut pid_file = File::create("/tmp/active_attach_pid")?;
+    let mut pid_file = File::create("/tmp/dbgee_pid")?;
     write!(pid_file, "{}", debuggee_pid.as_raw())?;
     Ok(())
 }
@@ -476,7 +474,7 @@ fn print_message<T: AsRef<str>>(mes: T) {
 }
 
 fn message_string<T: AsRef<str>>(mes: T) -> String {
-    format!("[ActiveAttach] {}", mes.as_ref())
+    format!("[Dbgee] {}", mes.as_ref())
 }
 
 #[cfg(test)]
@@ -489,7 +487,7 @@ mod tests {
     fn test_check_if_wrapperd_by_strings() {
         let actually_wrapped = indoc! {r#"
             #!/bin/sh
-            # a wrapper script generated by active_attach
+            # a wrapper script generated by dbgee
             some scripts
         "#};
         let tmpfile = make_temp_file(actually_wrapped);
