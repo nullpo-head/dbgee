@@ -10,3 +10,6 @@ edition = "2018"
 nix = "0.20.0"
 structopt = "0.3"
 strum = { version = "0.20", features = ["derive"] }
+anyhow = "1.0"
+indoc = "1.0"
+tempfile = "3"
