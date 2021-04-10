@@ -1,7 +1,6 @@
 use std::fs::File;
 use std::io::Write;
 use std::path::Path;
-use std::process::exit;
 use std::{env, fs};
 use std::{ffi::CString, io::Read};
 use std::{
@@ -114,14 +113,17 @@ pub enum AttachAction {
     Tmux,
 }
 
-fn main() -> Result<()> {
+fn main() {
     let clap_matches = Opts::clap().get_matches();
     let opts = Opts::from_clap(&clap_matches);
 
-    match opts {
+    let cmd_result = match opts {
         Opts::Run(run_opts) => run_debuggee(run_opts),
         Opts::Set(set_opts) => set_debuggee(set_opts, clap_matches),
         Opts::Unset(unset_opts) => unset_debuggee(unset_opts),
+    };
+    if let Err(e) = cmd_result {
+        print_error(&e.to_string());
     }
 }
 
@@ -131,16 +133,16 @@ fn run_debuggee(run_opts: RunOpts) -> Result<()> {
         .into_iter()
         .chain(run_opts.debuggee_args.iter())
         .collect();
-    fork_exec_stop(debuggee_pid, &debuggee_cmd);
+    fork_exec_stop(debuggee_pid, &debuggee_cmd)?;
     match run_opts.attach_opts.attach_action {
         AttachAction::WritePid => {
-            let _ = write_pid(debuggee_pid);
+            write_pid(debuggee_pid)?;
         }
         AttachAction::Tmux => {
             launch_debugger_in_tmux(&build_debugger_command(
                 &run_opts.attach_opts.debugger,
                 debuggee_pid,
-            ));
+            ))?;
         }
     }
 
@@ -175,7 +177,7 @@ fn wrap_debuggee_binary(debuggee: &str, run_command: &str) -> Result<()> {
         );
     }
 
-    let debuggee_path = get_valid_executable_path(Path::new(debuggee), "debuggee")?;
+    let debuggee_path = get_valid_executable_path(Path::new(debuggee), "the debuggee")?;
 
     let wrapper_sh_template_bytes = include_bytes!("../resources/wrapper.sh");
     let wrapper_sh_template = str::from_utf8(wrapper_sh_template_bytes).unwrap();
@@ -204,7 +206,7 @@ fn wrap_debuggee_binary(debuggee: &str, run_command: &str) -> Result<()> {
 }
 
 fn unwrap_debuggee_binary(debuggee: &str) -> Result<()> {
-    let wrapper_path = get_valid_executable_path(Path::new(debuggee), "debuggee")?;
+    let wrapper_path = get_valid_executable_path(Path::new(debuggee), "the debuggee")?;
 
     if !check_if_wrapped(debuggee) {
         bail!(
@@ -335,12 +337,13 @@ fn get_abspath<T: AsRef<Path>>(path: T, name: &str) -> Result<String> {
     Ok(abspath.to_owned())
 }
 
-fn fork_exec_stop<T: AsRef<str>>(debuggee_pid: unistd::Pid, debuggee_cmd: &[T]) {
+fn fork_exec_stop<T: AsRef<str>>(debuggee_pid: unistd::Pid, debuggee_cmd: &[T]) -> Result<()> {
+    get_valid_executable_path(debuggee_cmd[0].as_ref(), "the debuggee")?;
     let (read_fd, write_fd) =
-        unistd::pipe2(nix::fcntl::OFlag::O_CLOEXEC).expect("Error: pipe2 failed.");
+        unistd::pipe2(nix::fcntl::OFlag::O_CLOEXEC).with_context(|| "pipe2 failed")?;
     let mut sync_pipe_read: File = unsafe { File::from_raw_fd(read_fd) };
     let mut sync_pipe_write: File = unsafe { File::from_raw_fd(write_fd) };
-    match unsafe { unistd::fork().expect("fork failed.") } {
+    match unsafe { unistd::fork().with_context(|| "fork failed.")? } {
         unistd::ForkResult::Parent { child: _ } => {
             let mut buf = [0; 1];
             let _ = sync_pipe_read.read(&mut buf);
@@ -357,25 +360,31 @@ fn fork_exec_stop<T: AsRef<str>>(debuggee_pid: unistd::Pid, debuggee_cmd: &[T]) 
             }
         }
         unistd::ForkResult::Child => {
-            ptrace::attach(debuggee_pid).expect("attach failed");
+            ptrace::attach(debuggee_pid).with_context(|| {
+                "ptrace attach failed. Perhaps dgbee is being traced by some debugger?"
+            })?;
             let buf = [0; 1];
             let _ = sync_pipe_write.write(&buf);
             // Wait for the debuggee to be stopped by SIGSTOP, which is triggered by PTRACE_ATTACH
-            match wait::waitpid(debuggee_pid, None).expect("waiting for SIGSTOP failed.") {
+            match wait::waitpid(debuggee_pid, None)
+                .with_context(|| "Unexpected error. Waiting for SIGSTOP failed.")?
+            {
                 wait::WaitStatus::Stopped(_, nix::sys::signal::SIGSTOP) => {}
                 other => {
                     eprintln!(
-                        "The observed signal is not SISTOP, but continues. {:?}",
+                        "The observed signal is not SISTOP, but dbgee continues. {:?}",
                         other
                     );
                 }
             }
 
-            ptrace::cont(debuggee_pid, None).expect("Continuing the process failed");
-            match wait::waitpid(debuggee_pid, None).expect("waiting for SIGTRAP failed.") {
+            ptrace::cont(debuggee_pid, None)
+                .with_context(|| "Unexpected error. Continuing the process failed")?;
+            match wait::waitpid(debuggee_pid, None)
+                .with_context(|| "Unexpected error. Waiting for SIGTRAP failed.")?
+            {
                 wait::WaitStatus::Exited(_, _) => {
-                    eprintln!("The process exited for an unexpected reason");
-                    exit(1);
+                    panic!("The process exited for an unexpected reason");
                 }
                 wait::WaitStatus::Stopped(_, nix::sys::signal::SIGTRAP) => {}
                 other => {
@@ -387,9 +396,10 @@ fn fork_exec_stop<T: AsRef<str>>(debuggee_pid: unistd::Pid, debuggee_cmd: &[T]) 
             }
 
             ptrace::detach(debuggee_pid, nix::sys::signal::SIGSTOP)
-                .expect("detach and stop failed");
+                .with_context(|| "Unexpected error. Detach and stop failed")?;
         }
-    }
+    };
+    Ok(())
 }
 
 fn write_pid(debuggee_pid: unistd::Pid) -> Result<()> {
@@ -406,13 +416,13 @@ fn write_pid(debuggee_pid: unistd::Pid) -> Result<()> {
     Ok(())
 }
 
-fn launch_debugger_in_tmux<T: AsRef<str>>(debugger_cmd: &[T]) {
+fn launch_debugger_in_tmux<T: AsRef<str>>(debugger_cmd: &[T]) -> Result<()> {
     let is_tmux_active = Command::new("tmux")
         .args(&["ls"])
         .stderr(std::process::Stdio::null())
         .stdout(std::process::Stdio::null())
         .status()
-        .unwrap_or_else(|_| panic!(message_string("Failed to launch tmux. Is tmux installed?")));
+        .with_context(|| "Failed to launch tmux. Is tmux installed?")?;
 
     if is_tmux_active.success() {
         let mut args = vec!["new-window"];
@@ -422,11 +432,7 @@ fn launch_debugger_in_tmux<T: AsRef<str>>(debugger_cmd: &[T]) {
             .stderr(std::process::Stdio::null())
             .stdout(std::process::Stdio::null())
             .spawn()
-            .unwrap_or_else(|_| {
-                panic!(message_string(
-                    "Failed to open a new tmux window for an unexpected reason."
-                ))
-            });
+            .with_context(|| "Failed to open a new tmux window for an unexpected reason.")?;
     } else {
         let mut args = vec!["new-session"];
         args.extend(debugger_cmd.iter().map(T::as_ref));
@@ -435,16 +441,14 @@ fn launch_debugger_in_tmux<T: AsRef<str>>(debugger_cmd: &[T]) {
             .stderr(std::process::Stdio::null())
             .stdout(std::process::Stdio::null())
             .spawn()
-            .unwrap_or_else(|_| {
-                panic!(message_string(
-                    "Failed to open a new tmux session for an unexpected reason."
-                ))
-            });
+            .with_context(|| "Failed to open a new tmux session for an unexpected reason.")?;
         print_message("the debugger has launched in a new tmux session. Try `tmux a` to attach.");
     }
     print_message(
         "The debuggee process is running in the background. Run `fg` to do I/O with the debuggee.",
     );
+
+    Ok(())
 }
 
 fn build_debugger_command(debugger_opt: &str, debuggee_pid: unistd::Pid) -> Vec<String> {
@@ -465,6 +469,10 @@ fn build_debugger_command(debugger_opt: &str, debuggee_pid: unistd::Pid) -> Vec<
             command.to_string() + " " + debuggee_pid.as_raw().to_string().as_str(),
         ],
     }
+}
+
+fn print_error<T: AsRef<str>>(mes: T) {
+    eprintln!("{}", message_string(format!("Error: {}", mes.as_ref())));
 }
 
 fn print_message<T: AsRef<str>>(mes: T) {
