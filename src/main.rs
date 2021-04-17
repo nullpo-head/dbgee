@@ -24,7 +24,23 @@ use strum::{EnumString, EnumVariantNames, VariantNames as _};
 /// Launches the given command and attaches a debugger to it.
 #[derive(Debug, StructOpt)]
 #[structopt(name = "dbgee", about = "the active debuggee")]
-enum Opts {
+struct Opts {
+    #[structopt(subcommand)]
+    pub command: Subcommand,
+
+    /// Debugger to launch. Choose "gdb", "dlv", "stop-and-write-pid",
+    /// or you can specify an arbitrary command line.
+    /// The debuggee's PID follows your command line as an argument.
+    ///
+    /// stop-and-write-pid: Stops the debuggee, and prints the debuggee's PID.
+    /// dbgee writes the PID to /tmp/dbgee_pid. If stderr is a tty,
+    /// dbgee outputs the PID to stderr as well.
+    #[structopt(short, long, default_value("gdb"))]
+    pub debugger: String,
+}
+
+#[derive(Debug, StructOpt)]
+enum Subcommand {
     Run(RunOpts),
     Set(SetOpts),
     Unset(UnsetOpts),
@@ -85,88 +101,249 @@ struct UnsetOpts {
 
 #[derive(Debug, StructOpt)]
 struct AttachOpts {
-    /// Action to take after the debuggee launces.
+    /// Terminal to launch the debugger in.
     ///
-    /// tmux (default): Opens a new tmux window in last active tmux session, launches a debugger there, and has the debugger attach the debuggee.
-    /// If there is no active tmux session, it launches a new session in the background, and writes a notification to stderr (as far as stderr is a tty).
+    /// tmuxw (default): Opens a new tmux window in last active tmux session,
+    /// launches a debugger there, and has the debugger attach to the debuggee.
+    /// If there is no active tmux session, it launches a new session in the background,
+    /// and writes a notification to stderr (as far as stderr is a tty).
+
+    /// tmuxp: Opens a new tmux pane in last active tmux session.
     ///
-    /// write-pid: Stops the debuggee, and prints the debuggee's PID.
-    /// dbgee writes the PID to /tmp/dbgee_pid
-    /// If stderr is a tty, dbgee outputs the PID to stderr as well.
     #[structopt(
         short,
         long,
-        possible_values(AttachAction::VARIANTS),
-        default_value("tmux")
+        possible_values(DebuggerTerminalOpt::VARIANTS),
+        default_value("tmuxw")
     )]
-    pub attach_action: AttachAction,
-
-    /// Debugger to launch. Choose "gdb" or "dlv", or you can specify an arbitrary command line. The debuggee's PID follows your command line as an argument.
-    #[structopt(short, long, default_value("gdb"))]
-    pub debugger: String,
+    pub terminal: DebuggerTerminalOpt,
 }
 
 #[derive(Debug, EnumString, EnumVariantNames)]
 #[strum(serialize_all = "kebab-case")]
-pub enum AttachAction {
-    WritePid,
-    Tmux,
+pub enum DebuggerTerminalOpt {
+    Tmuxw,
+    Tmuxp,
+}
+
+trait Debugger {
+    fn run(&mut self, run_opts: &RunOpts, terminal: &dyn DebuggerTerminal) -> Result<()>;
+    fn set(&mut self, set_opts: &SetOpts, terminal: &dyn DebuggerTerminal) -> Result<()>;
+    fn unset(&mut self, unset_opts: &UnsetOpts) -> Result<()>;
+    fn build_attach_commandline(&self) -> Result<Vec<String>>;
+}
+
+struct GdbDebugger {
+    debuggee_pid: unistd::Pid,
+}
+
+struct StopAndWritePidDebugger;
+
+trait DebuggerTerminal {
+    fn open(&self, debugger: &dyn Debugger) -> Result<()>;
+}
+
+struct Tmux {
+    layout: TmuxLayout,
+}
+
+enum TmuxLayout {
+    NewWindow,
+    NewPane,
 }
 
 fn main() {
+    if let Err(e) = run() {
+        print_error(&e.to_string());
+        std::process::exit(1);
+    }
+}
+
+fn run() -> Result<()> {
     let clap_matches = Opts::clap().get_matches();
     let opts = Opts::from_clap(&clap_matches);
 
-    let cmd_result = match opts {
-        Opts::Run(run_opts) => run_debuggee(run_opts),
-        Opts::Set(set_opts) => set_debuggee(set_opts, clap_matches),
-        Opts::Unset(unset_opts) => unset_debuggee(unset_opts),
-    };
-    if let Err(e) = cmd_result {
-        print_error(&e.to_string());
-    }
-}
-
-fn run_debuggee(run_opts: RunOpts) -> Result<()> {
-    let debuggee_pid = nix::unistd::getpid();
-    let debuggee_cmd: Vec<&String> = vec![&run_opts.debuggee]
-        .into_iter()
-        .chain(run_opts.debuggee_args.iter())
-        .collect();
-    fork_exec_stop(debuggee_pid, &debuggee_cmd)?;
-    match run_opts.attach_opts.attach_action {
-        AttachAction::WritePid => {
-            write_pid(debuggee_pid)?;
+    let mut debugger = build_debugger(opts.debugger.as_str())?;
+    match opts.command {
+        Subcommand::Run(run_opts) => {
+            let debugger_terminal = build_debugger_terminal(&run_opts.attach_opts.terminal);
+            debugger.run(&run_opts, debugger_terminal.as_ref())
         }
-        AttachAction::Tmux => {
-            launch_debugger_in_tmux(&build_debugger_command(
-                &run_opts.attach_opts.debugger,
-                debuggee_pid,
-            ))?;
+        Subcommand::Set(set_opts) => {
+            let debugger_terminal = build_debugger_terminal(&set_opts.attach_opts.terminal);
+            debugger.set(&set_opts, debugger_terminal.as_ref())
         }
-    }
-
+        Subcommand::Unset(unset_opts) => debugger.unset(&unset_opts),
+    }?;
     Ok(())
 }
 
-fn set_debuggee(set_opts: SetOpts, clap_matches: ArgMatches) -> Result<()> {
-    let run_command = build_run_command(&clap_matches)?;
-    wrap_debuggee_binary(&set_opts.debuggee, &run_command)?;
-
-    if set_opts.start_cmd.is_empty() {
-        return Ok(());
+fn build_debugger(debugger: &str) -> Result<Box<dyn Debugger>> {
+    match debugger {
+        "gdb" => Ok(Box::new(GdbDebugger::new()?)),
+        "stop-and-write-pid" => Ok(Box::new(StopAndWritePidDebugger::new())),
+        _ => Err(anyhow!("Unsupported debugger: {}", debugger)),
     }
-
-    let mut child = Command::new(&set_opts.start_cmd[0])
-        .args(&set_opts.start_cmd[1..])
-        .spawn()?;
-    let _ = child.wait()?;
-
-    unwrap_debuggee_binary(&set_opts.debuggee)
 }
 
-fn unset_debuggee(unset_opts: UnsetOpts) -> Result<()> {
-    unwrap_debuggee_binary(&unset_opts.debuggee)
+fn build_debugger_terminal(action: &DebuggerTerminalOpt) -> Box<dyn DebuggerTerminal> {
+    match action {
+        DebuggerTerminalOpt::Tmuxw => Box::new(Tmux::new(TmuxLayout::NewWindow)),
+        DebuggerTerminalOpt::Tmuxp => Box::new(Tmux::new(TmuxLayout::NewPane)),
+    }
+}
+
+impl Debugger for GdbDebugger {
+    fn run(&mut self, run_opts: &RunOpts, terminal: &dyn DebuggerTerminal) -> Result<()> {
+        self.debuggee_pid = nix::unistd::getpid();
+        let debuggee_cmd: Vec<&String> = vec![&run_opts.debuggee]
+            .into_iter()
+            .chain(run_opts.debuggee_args.iter())
+            .collect();
+        fork_exec_stop(self.debuggee_pid, &debuggee_cmd)?;
+        terminal.open(self)
+    }
+
+    fn set(&mut self, set_opts: &SetOpts, _terminal: &dyn DebuggerTerminal) -> Result<()> {
+        let clap_matches = Opts::clap().get_matches();
+        let run_command = build_run_command(&clap_matches)?;
+        wrap_debuggee_binary(&set_opts.debuggee, &run_command)?;
+
+        if set_opts.start_cmd.is_empty() {
+            return Ok(());
+        }
+
+        let mut child = Command::new(&set_opts.start_cmd[0])
+            .args(&set_opts.start_cmd[1..])
+            .spawn()?;
+        let _ = child.wait()?;
+
+        unwrap_debuggee_binary(&set_opts.debuggee)
+    }
+
+    fn unset(&mut self, unset_opts: &UnsetOpts) -> Result<()> {
+        unwrap_debuggee_binary(&unset_opts.debuggee)
+    }
+
+    fn build_attach_commandline(&self) -> Result<Vec<String>> {
+        Ok(vec![
+            "gdb".to_owned(),
+            "-p".to_owned(),
+            self.debuggee_pid.as_raw().to_string(),
+        ])
+    }
+}
+
+impl GdbDebugger {
+    fn new() -> Result<GdbDebugger> {
+        Ok(GdbDebugger {
+            debuggee_pid: unistd::Pid::this(),
+        })
+    }
+}
+
+impl Debugger for StopAndWritePidDebugger {
+    fn run(&mut self, run_opts: &RunOpts, _terminal: &dyn DebuggerTerminal) -> Result<()> {
+        let debuggee_pid = unistd::getpid();
+        print_message(
+            "The debuggee process is stopped in the background. Atach a debugger to it by PID. \
+                To do I/O with the debuggee, run `fg` in your shell to bring it to the foreground",
+        );
+        print_message(&format!(
+            "PID: {}. It's also written to /tmp/dbgee_pid as a plain text number.",
+            debuggee_pid.as_raw()
+        ));
+        print_message("This message is suppressed if this process is redirected or piped.");
+        let mut pid_file = File::create("/tmp/dbgee_pid")?;
+        write!(pid_file, "{}", debuggee_pid.as_raw())?;
+        let debuggee_cmd: Vec<&String> = vec![&run_opts.debuggee]
+            .into_iter()
+            .chain(run_opts.debuggee_args.iter())
+            .collect();
+        fork_exec_stop(debuggee_pid, &debuggee_cmd)
+    }
+
+    fn set(&mut self, set_opts: &SetOpts, _terminal: &dyn DebuggerTerminal) -> Result<()> {
+        let clap_matches = Opts::clap().get_matches();
+        let run_command = build_run_command(&clap_matches)?;
+        wrap_debuggee_binary(&set_opts.debuggee, &run_command)?;
+
+        if set_opts.start_cmd.is_empty() {
+            return Ok(());
+        }
+
+        let mut child = Command::new(&set_opts.start_cmd[0])
+            .args(&set_opts.start_cmd[1..])
+            .spawn()?;
+        let _ = child.wait()?;
+
+        unwrap_debuggee_binary(&set_opts.debuggee)
+    }
+
+    fn unset(&mut self, unset_opts: &UnsetOpts) -> Result<()> {
+        unwrap_debuggee_binary(&unset_opts.debuggee)
+    }
+
+    fn build_attach_commandline(&self) -> Result<Vec<String>> {
+        bail!("build_attach_commandline should not be called for StopAndWritePidDebugger");
+    }
+}
+
+impl StopAndWritePidDebugger {
+    fn new() -> StopAndWritePidDebugger {
+        StopAndWritePidDebugger {}
+    }
+}
+
+impl Tmux {
+    fn new(layout: TmuxLayout) -> Tmux {
+        Tmux { layout }
+    }
+}
+
+impl TmuxLayout {
+    fn to_command(&self) -> Vec<&str> {
+        match self {
+            TmuxLayout::NewWindow => vec!["new-window"],
+            TmuxLayout::NewPane => vec!["splitw", "-h"],
+        }
+    }
+}
+
+impl DebuggerTerminal for Tmux {
+    fn open(&self, debugger: &dyn Debugger) -> Result<()> {
+        let debugger_cmd = debugger.build_attach_commandline()?;
+        let is_tmux_active = Command::new("tmux")
+            .args(&["ls"])
+            .stderr(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .status()
+            .with_context(|| "Failed to launch tmux. Is tmux installed?")?;
+
+        if is_tmux_active.success() {
+            let mut args = self.layout.to_command();
+            args.extend(debugger_cmd.iter().map(|s| s.as_str()));
+            Command::new("tmux")
+                .args(&args)
+                .status()
+                .with_context(|| "Failed to open a new tmux window for an unexpected reason.")?;
+        } else {
+            let mut args = vec!["new-session"];
+            args.extend(debugger_cmd.iter().map(|s| s.as_str()));
+            Command::new("tmux")
+                .args(&args)
+                .spawn()
+                .with_context(|| "Failed to open a new tmux session for an unexpected reason.")?;
+            print_message(
+                "the debugger has launched in a new tmux session. Try `tmux a` to attach.",
+            );
+        }
+        print_message(
+            "The debuggee process is running in the background. Run `fg` to do I/O with the debuggee.",
+        );
+
+        Ok(())
+    }
 }
 
 fn wrap_debuggee_binary(debuggee: &str, run_command: &str) -> Result<()> {
@@ -402,75 +579,6 @@ fn fork_exec_stop<T: AsRef<str>>(debuggee_pid: unistd::Pid, debuggee_cmd: &[T]) 
     Ok(())
 }
 
-fn write_pid(debuggee_pid: unistd::Pid) -> Result<()> {
-    print_message(
-        "The debuggee process is stopped in the background. Atach a debugger to it by PID. \
-            To do I/O with the debuggee, run `fg` in your shell to bring it to the foreground",
-    );
-    print_message(&format!(
-        "PID: {}. It's also written to /tmp/dbgee_pid as a plain text number.",
-        debuggee_pid.as_raw()
-    ));
-    let mut pid_file = File::create("/tmp/dbgee_pid")?;
-    write!(pid_file, "{}", debuggee_pid.as_raw())?;
-    Ok(())
-}
-
-fn launch_debugger_in_tmux<T: AsRef<str>>(debugger_cmd: &[T]) -> Result<()> {
-    let is_tmux_active = Command::new("tmux")
-        .args(&["ls"])
-        .stderr(std::process::Stdio::null())
-        .stdout(std::process::Stdio::null())
-        .status()
-        .with_context(|| "Failed to launch tmux. Is tmux installed?")?;
-
-    if is_tmux_active.success() {
-        let mut args = vec!["new-window"];
-        args.extend(debugger_cmd.iter().map(T::as_ref));
-        let _ = Command::new("tmux")
-            .args(&args)
-            .stderr(std::process::Stdio::null())
-            .stdout(std::process::Stdio::null())
-            .spawn()
-            .with_context(|| "Failed to open a new tmux window for an unexpected reason.")?;
-    } else {
-        let mut args = vec!["new-session"];
-        args.extend(debugger_cmd.iter().map(T::as_ref));
-        let _ = Command::new("tmux")
-            .args(&args)
-            .stderr(std::process::Stdio::null())
-            .stdout(std::process::Stdio::null())
-            .spawn()
-            .with_context(|| "Failed to open a new tmux session for an unexpected reason.")?;
-        print_message("the debugger has launched in a new tmux session. Try `tmux a` to attach.");
-    }
-    print_message(
-        "The debuggee process is running in the background. Run `fg` to do I/O with the debuggee.",
-    );
-
-    Ok(())
-}
-
-fn build_debugger_command(debugger_opt: &str, debuggee_pid: unistd::Pid) -> Vec<String> {
-    match debugger_opt {
-        "gdb" => vec![
-            "gdb".to_string(),
-            "-p".to_string(),
-            debuggee_pid.as_raw().to_string(),
-        ],
-        "dlv" => vec![
-            "dlv".to_string(),
-            "attach".to_string(),
-            debuggee_pid.as_raw().to_string(),
-        ],
-        command => vec![
-            "sh".to_string(),
-            "-c".to_string(),
-            command.to_string() + " " + debuggee_pid.as_raw().to_string().as_str(),
-        ],
-    }
-}
-
 fn print_error<T: AsRef<str>>(mes: T) {
     eprintln!("{}", message_string(format!("Error: {}", mes.as_ref())));
 }
@@ -549,8 +657,8 @@ mod tests {
             current_exe,
             "set",
             debuggee,
-            "-a",
-            "write-pid",
+            "-t",
+            "tmuxw",
             "--",
             start_cmd,
             "some_args",
@@ -566,7 +674,7 @@ mod tests {
         let constructed_clap_matches =
             Opts::clap().get_matches_from(constructed_run_command.iter());
 
-        let expected = vec![current_exe, "run", "-a", "write-pid", "--", debuggee];
+        let expected = vec![current_exe, "run", "-t", "tmuxw", "--", debuggee];
         let expected_clap_matches = Opts::clap().get_matches_from(expected.iter());
 
         assert!(compare_argmatches(
