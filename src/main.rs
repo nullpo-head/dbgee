@@ -737,11 +737,8 @@ fn fork_exec_stop<T: AsRef<str>>(debuggee_cmd: &[T]) -> Result<unistd::Pid> {
 
 fn wait_until_exit(pid: unistd::Pid) -> Result<i32> {
     loop {
-        match wait::waitpid(pid, None)? {
-            wait::WaitStatus::Exited(_, exit_status) => {
-                return Ok(exit_status);
-            }
-            _ => {}
+        if let wait::WaitStatus::Exited(_, exit_status) = wait::waitpid(pid, None)? {
+            return Ok(exit_status);
         }
     }
 }
