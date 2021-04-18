@@ -127,7 +127,7 @@ pub enum DebuggerTerminalOpt {
 }
 
 trait Debugger {
-    fn run(&mut self, run_opts: &RunOpts, terminal: &dyn DebuggerTerminal) -> Result<()>;
+    fn run(&mut self, run_opts: &RunOpts, terminal: &dyn DebuggerTerminal) -> Result<i32>;
     fn set(&mut self, set_opts: &SetOpts, terminal: &dyn DebuggerTerminal) -> Result<()>;
     fn unset(&mut self, unset_opts: &UnsetOpts) -> Result<()>;
     fn build_attach_commandline(&self) -> Result<Vec<String>>;
@@ -181,14 +181,17 @@ fn run() -> Result<()> {
     match opts.command {
         Subcommand::Run(run_opts) => {
             let debugger_terminal = build_debugger_terminal(&run_opts.attach_opts.terminal);
-            debugger.run(&run_opts, debugger_terminal.as_ref())
+            let exit_status = debugger.run(&run_opts, debugger_terminal.as_ref())?;
+            std::process::exit(exit_status);
         }
         Subcommand::Set(set_opts) => {
             let debugger_terminal = build_debugger_terminal(&set_opts.attach_opts.terminal);
-            debugger.set(&set_opts, debugger_terminal.as_ref())
+            debugger.set(&set_opts, debugger_terminal.as_ref())?;
         }
-        Subcommand::Unset(unset_opts) => debugger.unset(&unset_opts),
-    }?;
+        Subcommand::Unset(unset_opts) => {
+            debugger.unset(&unset_opts)?;
+        }
+    };
     Ok(())
 }
 
@@ -231,15 +234,15 @@ trait PidAttachableBinaryDebugger {
 }
 
 impl<T: PidAttachableBinaryDebugger> Debugger for T {
-    fn run(&mut self, run_opts: &RunOpts, terminal: &dyn DebuggerTerminal) -> Result<()> {
-        let debuggee_pid = nix::unistd::getpid();
+    fn run(&mut self, run_opts: &RunOpts, terminal: &dyn DebuggerTerminal) -> Result<i32> {
         let debuggee_cmd: Vec<&String> = vec![&run_opts.debuggee]
             .into_iter()
             .chain(run_opts.debuggee_args.iter())
             .collect();
-        fork_exec_stop(&debuggee_pid, &debuggee_cmd)?;
+        let debuggee_pid = fork_exec_stop(&debuggee_cmd)?;
         self.set_debuggee_pid(debuggee_pid);
-        terminal.open(self)
+        terminal.open(self)?;
+        wait_until_exit(debuggee_pid)
     }
 
     fn set(&mut self, set_opts: &SetOpts, terminal: &dyn DebuggerTerminal) -> Result<()> {
@@ -312,12 +315,13 @@ impl StopAndWritePidDebugger {
 }
 
 impl Debugger for StopAndWritePidDebugger {
-    fn run(&mut self, run_opts: &RunOpts, _terminal: &dyn DebuggerTerminal) -> Result<()> {
-        let debuggee_pid = unistd::getpid();
-        print_message(
-            "The debuggee process is stopped in the background. Atach a debugger to it by PID. \
-                To do I/O with the debuggee, run `fg` in your shell to bring it to the foreground",
-        );
+    fn run(&mut self, run_opts: &RunOpts, _terminal: &dyn DebuggerTerminal) -> Result<i32> {
+        let debuggee_cmd: Vec<&String> = vec![&run_opts.debuggee]
+            .into_iter()
+            .chain(run_opts.debuggee_args.iter())
+            .collect();
+        let debuggee_pid = fork_exec_stop(&debuggee_cmd)?;
+        print_message("The debuggee process is paused. Atach a debugger to it by PID.");
         print_message(&format!(
             "PID: {}. It's also written to /tmp/dbgee_pid as a plain text number.",
             debuggee_pid.as_raw()
@@ -325,11 +329,7 @@ impl Debugger for StopAndWritePidDebugger {
         print_message("This message is suppressed if the stderr is redirected or piped.");
         let mut pid_file = File::create("/tmp/dbgee_pid")?;
         write!(pid_file, "{}", debuggee_pid.as_raw())?;
-        let debuggee_cmd: Vec<&String> = vec![&run_opts.debuggee]
-            .into_iter()
-            .chain(run_opts.debuggee_args.iter())
-            .collect();
-        fork_exec_stop(&debuggee_pid, &debuggee_cmd)
+        wait_until_exit(debuggee_pid)
     }
 
     fn set(&mut self, set_opts: &SetOpts, terminal: &dyn DebuggerTerminal) -> Result<()> {
@@ -372,7 +372,7 @@ impl PythonDebugger {
 }
 
 impl Debugger for PythonDebugger {
-    fn run(&mut self, run_opts: &RunOpts, _terminal: &dyn DebuggerTerminal) -> Result<()> {
+    fn run(&mut self, run_opts: &RunOpts, _terminal: &dyn DebuggerTerminal) -> Result<i32> {
         print_message(
             "The debuggee process is paused. Attach to it in VSCode. \
                  VSCode is the only supported debugger for Python.",
@@ -390,11 +390,13 @@ impl Debugger for PythonDebugger {
         .into_iter()
         .chain(run_opts.debuggee_args.iter().map(|s| s.as_str()))
         .collect();
-        Command::new(&self.python_command)
+        let exit_status = Command::new(&self.python_command)
             .args(&debuggee_args)
             .status()
             .with_context(|| "failed to launch debugpy. Perhaps is port 5679 being used?")?;
-        Ok(())
+        exit_status
+            .code()
+            .ok_or_else(|| anyhow!("ExitStatus.code() failed for an unexpected reason"))
     }
 
     fn set(&mut self, _set_opts: &SetOpts, _terminal: &dyn DebuggerTerminal) -> Result<()> {
@@ -453,9 +455,6 @@ impl DebuggerTerminal for Tmux {
                 "the debugger has launched in a new tmux session. Try `tmux a` to attach.",
             );
         }
-        print_message(
-            "The debuggee process is running in the background. Run `fg` to do I/O with the debuggee.",
-        );
 
         Ok(())
     }
@@ -669,36 +668,37 @@ fn is_executable<P: AsRef<Path>>(path: P) -> bool {
     false
 }
 
-fn fork_exec_stop<T: AsRef<str>>(debuggee_pid: &unistd::Pid, debuggee_cmd: &[T]) -> Result<()> {
+fn fork_exec_stop<T: AsRef<str>>(debuggee_cmd: &[T]) -> Result<unistd::Pid> {
     get_valid_executable_path(debuggee_cmd[0].as_ref(), "the debuggee")?;
     let (read_fd, write_fd) =
         unistd::pipe2(nix::fcntl::OFlag::O_CLOEXEC).with_context(|| "pipe2 failed")?;
     let mut sync_pipe_read: File = unsafe { File::from_raw_fd(read_fd) };
     let mut sync_pipe_write: File = unsafe { File::from_raw_fd(write_fd) };
     match unsafe { unistd::fork().with_context(|| "fork failed.")? } {
-        unistd::ForkResult::Parent { child: _ } => {
+        unistd::ForkResult::Child => {
             let mut buf = [0; 1];
             let _ = sync_pipe_read.read(&mut buf);
             let cargs: Vec<CString> = debuggee_cmd
                 .iter()
                 .map(|arg| CString::new(arg.as_ref()).unwrap())
                 .collect();
-            if unistd::execv(&cargs[0], &cargs[0..]).is_err() {
-                eprintln!(
-                    "exec {} failed. Error: {}",
-                    &cargs[0].to_str().unwrap(),
-                    nix::Error::last()
-                );
-            }
+            let _ = unistd::execv(&cargs[0], &cargs[0..]);
+            bail!(
+                "exec {} failed. Error: {}",
+                &cargs[0].to_str().unwrap(),
+                nix::Error::last()
+            );
         }
-        unistd::ForkResult::Child => {
-            ptrace::attach(*debuggee_pid).with_context(|| {
+        unistd::ForkResult::Parent {
+            child: debuggee_pid,
+        } => {
+            ptrace::attach(debuggee_pid).with_context(|| {
                 "ptrace attach failed. Perhaps dgbee is being traced by some debugger?"
             })?;
             let buf = [0; 1];
             let _ = sync_pipe_write.write(&buf);
             // Wait for the debuggee to be stopped by SIGSTOP, which is triggered by PTRACE_ATTACH
-            match wait::waitpid(*debuggee_pid, None)
+            match wait::waitpid(debuggee_pid, None)
                 .with_context(|| "Unexpected error. Waiting for SIGSTOP failed.")?
             {
                 wait::WaitStatus::Stopped(_, nix::sys::signal::SIGSTOP) => {}
@@ -710,9 +710,9 @@ fn fork_exec_stop<T: AsRef<str>>(debuggee_pid: &unistd::Pid, debuggee_cmd: &[T])
                 }
             }
 
-            ptrace::cont(*debuggee_pid, None)
+            ptrace::cont(debuggee_pid, None)
                 .with_context(|| "Unexpected error. Continuing the process failed")?;
-            match wait::waitpid(*debuggee_pid, None)
+            match wait::waitpid(debuggee_pid, None)
                 .with_context(|| "Unexpected error. Waiting for SIGTRAP failed.")?
             {
                 wait::WaitStatus::Exited(_, _) => {
@@ -727,11 +727,23 @@ fn fork_exec_stop<T: AsRef<str>>(debuggee_pid: &unistd::Pid, debuggee_cmd: &[T])
                 }
             }
 
-            ptrace::detach(*debuggee_pid, nix::sys::signal::SIGSTOP)
+            ptrace::detach(debuggee_pid, nix::sys::signal::SIGSTOP)
                 .with_context(|| "Unexpected error. Detach and stop failed")?;
+
+            Ok(debuggee_pid)
         }
-    };
-    Ok(())
+    }
+}
+
+fn wait_until_exit(pid: unistd::Pid) -> Result<i32> {
+    loop {
+        match wait::waitpid(pid, None)? {
+            wait::WaitStatus::Exited(_, exit_status) => {
+                return Ok(exit_status);
+            }
+            _ => {}
+        }
+    }
 }
 
 fn print_error<T: AsRef<str>>(mes: T) {
