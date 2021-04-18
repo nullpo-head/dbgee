@@ -28,14 +28,14 @@ struct Opts {
     #[structopt(subcommand)]
     pub command: Subcommand,
 
-    /// Debugger to launch. Choose "gdb", "dlv", "stop-and-write-pid",
+    /// Debugger to launch. Choose "auto", "gdb", "dlv", "stop-and-write-pid", "python"
     /// or you can specify an arbitrary command line.
     /// The debuggee's PID follows your command line as an argument.
     ///
     /// stop-and-write-pid: Stops the debuggee, and prints the debuggee's PID.
     /// dbgee writes the PID to /tmp/dbgee_pid. If stderr is a tty,
     /// dbgee outputs the PID to stderr as well.
-    #[structopt(short, long, default_value("gdb"))]
+    #[structopt(short, long, default_value("auto"))]
     pub debugger: String,
 }
 
@@ -171,7 +171,13 @@ fn run() -> Result<()> {
     let clap_matches = Opts::clap().get_matches();
     let opts = Opts::from_clap(&clap_matches);
 
-    let mut debugger = build_debugger(opts.debugger.as_str())?;
+    let debuggee = match opts.command {
+        Subcommand::Run(ref run_opts) => &run_opts.debuggee,
+        Subcommand::Set(ref set_opts) => &set_opts.debuggee,
+        Subcommand::Unset(ref unset_opts) => &unset_opts.debuggee,
+    };
+    let mut debugger = build_debugger(&opts.debugger, debuggee)?;
+
     match opts.command {
         Subcommand::Run(run_opts) => {
             let debugger_terminal = build_debugger_terminal(&run_opts.attach_opts.terminal);
@@ -186,14 +192,30 @@ fn run() -> Result<()> {
     Ok(())
 }
 
-fn build_debugger(debugger: &str) -> Result<Box<dyn Debugger>> {
+fn build_debugger(debugger: &str, debuggee: &str) -> Result<Box<dyn Debugger>> {
     match debugger {
+        "auto" => detect_debugger(debuggee),
         "gdb" => Ok(Box::new(GdbDebugger::new()?)),
         "dlv" => Ok(Box::new(DelveDebugger::new()?)),
         "stop-and-write-pid" => Ok(Box::new(StopAndWritePidDebugger::new())),
         "debugpy" => Ok(Box::new(PythonDebugger::new()?)),
         _ => Err(anyhow!("Unsupported debugger: {}", debugger)),
     }
+}
+
+fn detect_debugger(debuggee: &str) -> Result<Box<dyn Debugger>> {
+    let file_output = Command::new("file").args(&[debuggee]).output()?;
+    let file_output = str::from_utf8(&file_output.stdout)?;
+    if file_output.contains("Go ") {
+        return Ok(Box::new(DelveDebugger::new()?));
+    }
+    if file_output.contains("ELF") {
+        return Ok(Box::new(GdbDebugger::new()?));
+    }
+    if file_output.contains("Python") {
+        return Ok(Box::new(PythonDebugger::new()?));
+    }
+    bail!("Could not detect the language of the debuggee")
 }
 
 fn build_debugger_terminal(action: &DebuggerTerminalOpt) -> Box<dyn DebuggerTerminal> {
