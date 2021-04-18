@@ -300,7 +300,7 @@ impl Debugger for StopAndWritePidDebugger {
             "PID: {}. It's also written to /tmp/dbgee_pid as a plain text number.",
             debuggee_pid.as_raw()
         ));
-        print_message("This message is suppressed if this process is redirected or piped.");
+        print_message("This message is suppressed if the stderr is redirected or piped.");
         let mut pid_file = File::create("/tmp/dbgee_pid")?;
         write!(pid_file, "{}", debuggee_pid.as_raw())?;
         let debuggee_cmd: Vec<&String> = vec![&run_opts.debuggee]
@@ -356,7 +356,7 @@ impl Debugger for PythonDebugger {
                  VSCode is the only supported debugger for Python.",
         );
         print_message("Port: 5679");
-        print_message("This message is suppressed if this process is redirected or piped.");
+        print_message("This message is suppressed if the stderr is redirected or piped.");
         let debuggee_args: Vec<&str> = vec![
             "-m",
             "debugpy",
