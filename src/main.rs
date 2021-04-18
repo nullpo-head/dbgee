@@ -143,6 +143,10 @@ struct DelveDebugger {
 
 struct StopAndWritePidDebugger;
 
+struct PythonDebugger {
+    python_command: String,
+}
+
 trait DebuggerTerminal {
     fn open(&self, debugger: &dyn Debugger) -> Result<()>;
 }
@@ -187,6 +191,7 @@ fn build_debugger(debugger: &str) -> Result<Box<dyn Debugger>> {
         "gdb" => Ok(Box::new(GdbDebugger::new()?)),
         "dlv" => Ok(Box::new(DelveDebugger::new()?)),
         "stop-and-write-pid" => Ok(Box::new(StopAndWritePidDebugger::new())),
+        "debugpy" => Ok(Box::new(PythonDebugger::new()?)),
         _ => Err(anyhow!("Unsupported debugger: {}", debugger)),
     }
 }
@@ -278,6 +283,12 @@ impl PidAttachableBinaryDebugger for DelveDebugger {
     }
 }
 
+impl StopAndWritePidDebugger {
+    fn new() -> StopAndWritePidDebugger {
+        StopAndWritePidDebugger {}
+    }
+}
+
 impl Debugger for StopAndWritePidDebugger {
     fn run(&mut self, run_opts: &RunOpts, _terminal: &dyn DebuggerTerminal) -> Result<()> {
         let debuggee_pid = unistd::getpid();
@@ -312,9 +323,68 @@ impl Debugger for StopAndWritePidDebugger {
     }
 }
 
-impl StopAndWritePidDebugger {
-    fn new() -> StopAndWritePidDebugger {
-        StopAndWritePidDebugger {}
+impl PythonDebugger {
+    fn new() -> Result<PythonDebugger> {
+        let python_path;
+        if command_exists("python3") {
+            python_path = "python3".to_owned();
+        } else if command_exists("python") {
+            python_path = "python".to_owned();
+        } else {
+            bail!("Neither 'python3' nor 'python' exist. Did you install python?");
+        }
+
+        let debugpy_exists = Command::new(&python_path)
+            .args(&["-c", "'import debugpy'"])
+            .stderr(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .status();
+        if debugpy_exists.is_err() || !debugpy_exists.unwrap().success() {
+            bail!("'debugpy' module is not installed. Please install debugpy via pip.");
+        }
+
+        Ok(PythonDebugger {
+            python_command: python_path,
+        })
+    }
+}
+
+impl Debugger for PythonDebugger {
+    fn run(&mut self, run_opts: &RunOpts, _terminal: &dyn DebuggerTerminal) -> Result<()> {
+        print_message(
+            "The debuggee process is paused. Attach to it in VSCode. \
+                 VSCode is the only supported debugger for Python.",
+        );
+        print_message("Port: 5679");
+        print_message("This message is suppressed if this process is redirected or piped.");
+        let debuggee_args: Vec<&str> = vec![
+            "-m",
+            "debugpy",
+            "--wait-for-client",
+            "--listen",
+            "5679",
+            &run_opts.debuggee,
+        ]
+        .into_iter()
+        .chain(run_opts.debuggee_args.iter().map(|s| s.as_str()))
+        .collect();
+        Command::new(&self.python_command)
+            .args(&debuggee_args)
+            .status()
+            .with_context(|| "failed to launch debugpy. Perhaps is port 5679 being used?")?;
+        Ok(())
+    }
+
+    fn set(&mut self, _set_opts: &SetOpts, _terminal: &dyn DebuggerTerminal) -> Result<()> {
+        bail!("set is not implemented yet for Python");
+    }
+
+    fn unset(&mut self, _unset_opts: &UnsetOpts) -> Result<()> {
+        bail!("unset is not implemented yet for Python");
+    }
+
+    fn build_attach_commandline(&self) -> Result<Vec<String>> {
+        bail!("build_attach_commandline should not be called for PythonDebugger");
     }
 }
 
