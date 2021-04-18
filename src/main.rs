@@ -137,6 +137,10 @@ struct GdbDebugger {
     debuggee_pid: unistd::Pid,
 }
 
+struct DelveDebugger {
+    debuggee_pid: unistd::Pid,
+}
+
 struct StopAndWritePidDebugger;
 
 trait DebuggerTerminal {
@@ -181,6 +185,7 @@ fn run() -> Result<()> {
 fn build_debugger(debugger: &str) -> Result<Box<dyn Debugger>> {
     match debugger {
         "gdb" => Ok(Box::new(GdbDebugger::new()?)),
+        "dlv" => Ok(Box::new(DelveDebugger::new()?)),
         "stop-and-write-pid" => Ok(Box::new(StopAndWritePidDebugger::new())),
         _ => Err(anyhow!("Unsupported debugger: {}", debugger)),
     }
@@ -193,36 +198,47 @@ fn build_debugger_terminal(action: &DebuggerTerminalOpt) -> Box<dyn DebuggerTerm
     }
 }
 
-impl Debugger for GdbDebugger {
+trait PidAttachableBinaryDebugger {
+    fn build_attach_commandline(&self) -> Result<Vec<String>>;
+    fn set_debuggee_pid(&mut self, pid: unistd::Pid);
+}
+
+impl<T: PidAttachableBinaryDebugger> Debugger for T {
     fn run(&mut self, run_opts: &RunOpts, terminal: &dyn DebuggerTerminal) -> Result<()> {
-        self.debuggee_pid = nix::unistd::getpid();
+        let debuggee_pid = nix::unistd::getpid();
         let debuggee_cmd: Vec<&String> = vec![&run_opts.debuggee]
             .into_iter()
             .chain(run_opts.debuggee_args.iter())
             .collect();
-        fork_exec_stop(self.debuggee_pid, &debuggee_cmd)?;
+        fork_exec_stop(&debuggee_pid, &debuggee_cmd)?;
+        self.set_debuggee_pid(debuggee_pid);
         terminal.open(self)
     }
 
-    fn set(&mut self, set_opts: &SetOpts, _terminal: &dyn DebuggerTerminal) -> Result<()> {
-        let clap_matches = Opts::clap().get_matches();
-        let run_command = build_run_command(&clap_matches)?;
-        wrap_debuggee_binary(&set_opts.debuggee, &run_command)?;
-
-        if set_opts.start_cmd.is_empty() {
-            return Ok(());
-        }
-
-        let mut child = Command::new(&set_opts.start_cmd[0])
-            .args(&set_opts.start_cmd[1..])
-            .spawn()?;
-        let _ = child.wait()?;
-
-        unwrap_debuggee_binary(&set_opts.debuggee)
+    fn set(&mut self, set_opts: &SetOpts, terminal: &dyn DebuggerTerminal) -> Result<()> {
+        set_to_exec_dgeee(set_opts, terminal)
     }
 
     fn unset(&mut self, unset_opts: &UnsetOpts) -> Result<()> {
-        unwrap_debuggee_binary(&unset_opts.debuggee)
+        unset_from_exec_dbgee(unset_opts)
+    }
+
+    fn build_attach_commandline(&self) -> Result<Vec<String>> {
+        self.build_attach_commandline()
+    }
+}
+
+impl GdbDebugger {
+    fn new() -> Result<GdbDebugger> {
+        Ok(GdbDebugger {
+            debuggee_pid: unistd::Pid::this(),
+        })
+    }
+}
+
+impl PidAttachableBinaryDebugger for GdbDebugger {
+    fn set_debuggee_pid(&mut self, pid: unistd::Pid) {
+        self.debuggee_pid = pid;
     }
 
     fn build_attach_commandline(&self) -> Result<Vec<String>> {
@@ -234,11 +250,25 @@ impl Debugger for GdbDebugger {
     }
 }
 
-impl GdbDebugger {
-    fn new() -> Result<GdbDebugger> {
-        Ok(GdbDebugger {
+impl DelveDebugger {
+    fn new() -> Result<DelveDebugger> {
+        Ok(DelveDebugger {
             debuggee_pid: unistd::Pid::this(),
         })
+    }
+}
+
+impl PidAttachableBinaryDebugger for DelveDebugger {
+    fn set_debuggee_pid(&mut self, pid: unistd::Pid) {
+        self.debuggee_pid = pid;
+    }
+
+    fn build_attach_commandline(&self) -> Result<Vec<String>> {
+        Ok(vec![
+            "dlv".to_owned(),
+            "attach".to_owned(),
+            self.debuggee_pid.as_raw().to_string(),
+        ])
     }
 }
 
@@ -260,28 +290,15 @@ impl Debugger for StopAndWritePidDebugger {
             .into_iter()
             .chain(run_opts.debuggee_args.iter())
             .collect();
-        fork_exec_stop(debuggee_pid, &debuggee_cmd)
+        fork_exec_stop(&debuggee_pid, &debuggee_cmd)
     }
 
-    fn set(&mut self, set_opts: &SetOpts, _terminal: &dyn DebuggerTerminal) -> Result<()> {
-        let clap_matches = Opts::clap().get_matches();
-        let run_command = build_run_command(&clap_matches)?;
-        wrap_debuggee_binary(&set_opts.debuggee, &run_command)?;
-
-        if set_opts.start_cmd.is_empty() {
-            return Ok(());
-        }
-
-        let mut child = Command::new(&set_opts.start_cmd[0])
-            .args(&set_opts.start_cmd[1..])
-            .spawn()?;
-        let _ = child.wait()?;
-
-        unwrap_debuggee_binary(&set_opts.debuggee)
+    fn set(&mut self, set_opts: &SetOpts, terminal: &dyn DebuggerTerminal) -> Result<()> {
+        set_to_exec_dgeee(set_opts, terminal)
     }
 
     fn unset(&mut self, unset_opts: &UnsetOpts) -> Result<()> {
-        unwrap_debuggee_binary(&unset_opts.debuggee)
+        unset_from_exec_dbgee(unset_opts)
     }
 
     fn build_attach_commandline(&self) -> Result<Vec<String>> {
@@ -344,6 +361,27 @@ impl DebuggerTerminal for Tmux {
 
         Ok(())
     }
+}
+
+fn set_to_exec_dgeee(set_opts: &SetOpts, _terminal: &dyn DebuggerTerminal) -> Result<()> {
+    let clap_matches = Opts::clap().get_matches();
+    let run_command = build_run_command(&clap_matches)?;
+    wrap_debuggee_binary(&set_opts.debuggee, &run_command)?;
+
+    if set_opts.start_cmd.is_empty() {
+        return Ok(());
+    }
+
+    let mut child = Command::new(&set_opts.start_cmd[0])
+        .args(&set_opts.start_cmd[1..])
+        .spawn()?;
+    let _ = child.wait()?;
+
+    unwrap_debuggee_binary(&set_opts.debuggee)
+}
+
+fn unset_from_exec_dbgee(unset_opts: &UnsetOpts) -> Result<()> {
+    unwrap_debuggee_binary(&unset_opts.debuggee)
 }
 
 fn wrap_debuggee_binary(debuggee: &str, run_command: &str) -> Result<()> {
@@ -514,7 +552,7 @@ fn get_abspath<T: AsRef<Path>>(path: T, name: &str) -> Result<String> {
     Ok(abspath.to_owned())
 }
 
-fn fork_exec_stop<T: AsRef<str>>(debuggee_pid: unistd::Pid, debuggee_cmd: &[T]) -> Result<()> {
+fn fork_exec_stop<T: AsRef<str>>(debuggee_pid: &unistd::Pid, debuggee_cmd: &[T]) -> Result<()> {
     get_valid_executable_path(debuggee_cmd[0].as_ref(), "the debuggee")?;
     let (read_fd, write_fd) =
         unistd::pipe2(nix::fcntl::OFlag::O_CLOEXEC).with_context(|| "pipe2 failed")?;
@@ -537,13 +575,13 @@ fn fork_exec_stop<T: AsRef<str>>(debuggee_pid: unistd::Pid, debuggee_cmd: &[T]) 
             }
         }
         unistd::ForkResult::Child => {
-            ptrace::attach(debuggee_pid).with_context(|| {
+            ptrace::attach(*debuggee_pid).with_context(|| {
                 "ptrace attach failed. Perhaps dgbee is being traced by some debugger?"
             })?;
             let buf = [0; 1];
             let _ = sync_pipe_write.write(&buf);
             // Wait for the debuggee to be stopped by SIGSTOP, which is triggered by PTRACE_ATTACH
-            match wait::waitpid(debuggee_pid, None)
+            match wait::waitpid(*debuggee_pid, None)
                 .with_context(|| "Unexpected error. Waiting for SIGSTOP failed.")?
             {
                 wait::WaitStatus::Stopped(_, nix::sys::signal::SIGSTOP) => {}
@@ -555,9 +593,9 @@ fn fork_exec_stop<T: AsRef<str>>(debuggee_pid: unistd::Pid, debuggee_cmd: &[T]) 
                 }
             }
 
-            ptrace::cont(debuggee_pid, None)
+            ptrace::cont(*debuggee_pid, None)
                 .with_context(|| "Unexpected error. Continuing the process failed")?;
-            match wait::waitpid(debuggee_pid, None)
+            match wait::waitpid(*debuggee_pid, None)
                 .with_context(|| "Unexpected error. Waiting for SIGTRAP failed.")?
             {
                 wait::WaitStatus::Exited(_, _) => {
@@ -572,7 +610,7 @@ fn fork_exec_stop<T: AsRef<str>>(debuggee_pid: unistd::Pid, debuggee_cmd: &[T]) 
                 }
             }
 
-            ptrace::detach(debuggee_pid, nix::sys::signal::SIGSTOP)
+            ptrace::detach(*debuggee_pid, nix::sys::signal::SIGSTOP)
                 .with_context(|| "Unexpected error. Detach and stop failed")?;
         }
     };
