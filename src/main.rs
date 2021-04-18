@@ -230,6 +230,9 @@ impl<T: PidAttachableBinaryDebugger> Debugger for T {
 
 impl GdbDebugger {
     fn new() -> Result<GdbDebugger> {
+        if !command_exists("gdb") {
+            bail!("'gdb' is not in PATH. Did you install gdb?")
+        }
         Ok(GdbDebugger {
             debuggee_pid: unistd::Pid::this(),
         })
@@ -252,6 +255,9 @@ impl PidAttachableBinaryDebugger for GdbDebugger {
 
 impl DelveDebugger {
     fn new() -> Result<DelveDebugger> {
+        if !command_exists("dlv") {
+            bail!("'dlv' is not in PATH. Did you install delve?")
+        }
         Ok(DelveDebugger {
             debuggee_pid: unistd::Pid::this(),
         })
@@ -518,12 +524,21 @@ fn escape_single_quote(s: &str) -> String {
     s.replace("'", "'\"'\"'")
 }
 
+fn command_exists(command: &str) -> bool {
+    if let Ok(path) = env::var("PATH") {
+        for dir in path.split(':') {
+            let path = format!("{}/{}", dir, command);
+            if is_executable(path) {
+                return true;
+            }
+        }
+    }
+    false
+}
+
 fn get_valid_executable_path<T: AsRef<Path>>(path: T, name: &str) -> Result<String> {
     let abspath = get_abspath(path, name)?;
-    let path = Path::new(&abspath);
-    let metadata = path.metadata()?;
-    // TODO: more fine-grained permission check
-    if !metadata.is_file() && (metadata.permissions().mode() & 0o111 != 0) {
+    if !is_executable(&abspath) {
         bail!("{} ({}) is not executable", name, abspath);
     }
     Ok(abspath)
@@ -550,6 +565,16 @@ fn get_abspath<T: AsRef<Path>>(path: T, name: &str) -> Result<String> {
         )
     })?;
     Ok(abspath.to_owned())
+}
+
+fn is_executable<P: AsRef<Path>>(path: P) -> bool {
+    if let Ok(metadata) = fs::metadata(path) {
+        // TODO: more fine-grained permission check
+        if metadata.is_file() && (metadata.permissions().mode() & 0o111 != 0) {
+            return true;
+        }
+    }
+    false
 }
 
 fn fork_exec_stop<T: AsRef<str>>(debuggee_pid: &unistd::Pid, debuggee_cmd: &[T]) -> Result<()> {
