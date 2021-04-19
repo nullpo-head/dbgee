@@ -133,31 +133,8 @@ trait Debugger {
     fn build_attach_commandline(&self) -> Result<Vec<String>>;
 }
 
-struct GdbDebugger {
-    debuggee_pid: unistd::Pid,
-}
-
-struct DelveDebugger {
-    debuggee_pid: unistd::Pid,
-}
-
-struct StopAndWritePidDebugger;
-
-struct PythonDebugger {
-    python_command: String,
-}
-
 trait DebuggerTerminal {
     fn open(&self, debugger: &dyn Debugger) -> Result<()>;
-}
-
-struct Tmux {
-    layout: TmuxLayout,
-}
-
-enum TmuxLayout {
-    NewWindow,
-    NewPane,
 }
 
 fn main() {
@@ -258,6 +235,10 @@ impl<T: PidAttachableBinaryDebugger> Debugger for T {
     }
 }
 
+struct GdbDebugger {
+    debuggee_pid: unistd::Pid,
+}
+
 impl GdbDebugger {
     fn new() -> Result<GdbDebugger> {
         if !command_exists("gdb") {
@@ -281,6 +262,10 @@ impl PidAttachableBinaryDebugger for GdbDebugger {
             self.debuggee_pid.as_raw().to_string(),
         ])
     }
+}
+
+struct DelveDebugger {
+    debuggee_pid: unistd::Pid,
 }
 
 impl DelveDebugger {
@@ -307,6 +292,8 @@ impl PidAttachableBinaryDebugger for DelveDebugger {
         ])
     }
 }
+
+struct StopAndWritePidDebugger;
 
 impl StopAndWritePidDebugger {
     fn new() -> StopAndWritePidDebugger {
@@ -343,6 +330,10 @@ impl Debugger for StopAndWritePidDebugger {
     fn build_attach_commandline(&self) -> Result<Vec<String>> {
         bail!("build_attach_commandline should not be called for StopAndWritePidDebugger");
     }
+}
+
+struct PythonDebugger {
+    python_command: String,
 }
 
 impl PythonDebugger {
@@ -410,6 +401,15 @@ impl Debugger for PythonDebugger {
     fn build_attach_commandline(&self) -> Result<Vec<String>> {
         bail!("build_attach_commandline should not be called for PythonDebugger");
     }
+}
+
+struct Tmux {
+    layout: TmuxLayout,
+}
+
+enum TmuxLayout {
+    NewWindow,
+    NewPane,
 }
 
 impl Tmux {
