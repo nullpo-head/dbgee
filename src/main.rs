@@ -1,6 +1,6 @@
-use std::fs::File;
 use std::io::Write;
 use std::path::Path;
+use std::{collections::HashMap, fs::File};
 use std::{env, fs};
 use std::{ffi::CString, io::Read};
 use std::{
@@ -15,11 +15,12 @@ use std::{
 use std::{path::PathBuf, str::FromStr};
 
 use anyhow::{anyhow, bail, Context, Result};
-use nix::sys::{ptrace, wait};
+use nix::sys::{ptrace, signal, wait};
 use nix::unistd;
 use structopt::clap::ArgMatches;
 use structopt::StructOpt;
-use strum::{EnumString, EnumVariantNames, VariantNames as _};
+use strum::{Display, EnumString, EnumVariantNames, VariantNames as _};
+use tempfile::NamedTempFile;
 
 /// Launches the given command and attaches a debugger to it.
 #[derive(Debug, StructOpt)]
@@ -107,8 +108,10 @@ struct AttachOpts {
     /// launches a debugger there, and has the debugger attach to the debuggee.
     /// If there is no active tmux session, it launches a new session in the background,
     /// and writes a notification to stderr (as far as stderr is a tty).
-
+    ///
     /// tmuxp: Opens a new tmux pane in last active tmux session.
+    ///
+    /// vscode: Open nothing in the terminal, and wait for VSCode to connect to the debugger
     ///
     #[structopt(
         short,
@@ -124,27 +127,45 @@ struct AttachOpts {
 pub enum DebuggerTerminalOpt {
     Tmuxw,
     Tmuxp,
+    Vscode,
 }
 
 trait Debugger {
-    fn run(&mut self, run_opts: &RunOpts, terminal: &dyn DebuggerTerminal) -> Result<i32>;
-    fn set(&mut self, set_opts: &SetOpts, terminal: &dyn DebuggerTerminal) -> Result<()>;
+    fn run(&mut self, run_opts: &RunOpts, terminal: &mut dyn DebuggerTerminal) -> Result<i32>;
+    fn set(&mut self, set_opts: &SetOpts, terminal: &mut dyn DebuggerTerminal) -> Result<()>;
     fn unset(&mut self, unset_opts: &UnsetOpts) -> Result<()>;
     fn build_attach_commandline(&self) -> Result<Vec<String>>;
+    fn build_attach_information(&self) -> Result<HashMap<AttachInformationKey, String>>;
 }
 
 trait DebuggerTerminal {
-    fn open(&self, debugger: &dyn Debugger) -> Result<()>;
+    fn open(&mut self, debugger: &dyn Debugger) -> Result<()>;
 }
 
+#[derive(Debug, PartialEq, Eq, Hash, EnumString, Display)]
+#[strum(serialize_all = "snake_case")]
+enum AttachInformationKey {
+    DebuggerTypeHint,
+    Pid,
+    DebuggerPort,
+    ProgramName,
+}
+
+const EXITCODE_SIGNALLED: i32 = 130;
+
 fn main() {
-    if let Err(e) = run() {
-        print_error(&e.to_string());
-        std::process::exit(1);
+    match run() {
+        Ok(exit_status) => {
+            std::process::exit(exit_status);
+        }
+        Err(e) => {
+            print_error(&e.to_string());
+            std::process::exit(1);
+        }
     }
 }
 
-fn run() -> Result<()> {
+fn run() -> Result<i32> {
     let clap_matches = Opts::clap().get_matches();
     let opts = Opts::from_clap(&clap_matches);
 
@@ -157,25 +178,25 @@ fn run() -> Result<()> {
 
     match opts.command {
         Subcommand::Run(run_opts) => {
-            let debugger_terminal = build_debugger_terminal(&run_opts.attach_opts.terminal);
-            let exit_status = debugger.run(&run_opts, debugger_terminal.as_ref())?;
-            std::process::exit(exit_status);
+            let mut debugger_terminal = build_debugger_terminal(&run_opts.attach_opts.terminal);
+            let exit_status = debugger.run(&run_opts, debugger_terminal.as_mut())?;
+            return Ok(exit_status);
         }
         Subcommand::Set(set_opts) => {
-            let debugger_terminal = build_debugger_terminal(&set_opts.attach_opts.terminal);
-            debugger.set(&set_opts, debugger_terminal.as_ref())?;
+            let mut debugger_terminal = build_debugger_terminal(&set_opts.attach_opts.terminal);
+            debugger.set(&set_opts, debugger_terminal.as_mut())?;
         }
         Subcommand::Unset(unset_opts) => {
             debugger.unset(&unset_opts)?;
         }
     };
-    Ok(())
+    Ok(0)
 }
 
 fn build_debugger(debugger: &str, debuggee: &str) -> Result<Box<dyn Debugger>> {
     match debugger {
         "auto" => detect_debugger(debuggee),
-        "gdb" => Ok(Box::new(GdbDebugger::new()?)),
+        "gdb" => Ok(Box::new(GdbDebugger::new(debuggee)?)),
         "dlv" => Ok(Box::new(DelveDebugger::new()?)),
         "stop-and-write-pid" => Ok(Box::new(StopAndWritePidDebugger::new())),
         "debugpy" => Ok(Box::new(PythonDebugger::new()?)),
@@ -190,7 +211,7 @@ fn detect_debugger(debuggee: &str) -> Result<Box<dyn Debugger>> {
         return Ok(Box::new(DelveDebugger::new()?));
     }
     if file_output.contains("ELF") {
-        return Ok(Box::new(GdbDebugger::new()?));
+        return Ok(Box::new(GdbDebugger::new(debuggee)?));
     }
     if file_output.contains("Python") {
         return Ok(Box::new(PythonDebugger::new()?));
@@ -202,16 +223,18 @@ fn build_debugger_terminal(action: &DebuggerTerminalOpt) -> Box<dyn DebuggerTerm
     match action {
         DebuggerTerminalOpt::Tmuxw => Box::new(Tmux::new(TmuxLayout::NewWindow)),
         DebuggerTerminalOpt::Tmuxp => Box::new(Tmux::new(TmuxLayout::NewPane)),
+        DebuggerTerminalOpt::Vscode => Box::new(VsCode::new()),
     }
 }
 
 trait PidAttachableBinaryDebugger {
     fn build_attach_commandline(&self) -> Result<Vec<String>>;
+    fn build_attach_information(&self) -> Result<HashMap<AttachInformationKey, String>>;
     fn set_debuggee_pid(&mut self, pid: unistd::Pid);
 }
 
 impl<T: PidAttachableBinaryDebugger> Debugger for T {
-    fn run(&mut self, run_opts: &RunOpts, terminal: &dyn DebuggerTerminal) -> Result<i32> {
+    fn run(&mut self, run_opts: &RunOpts, terminal: &mut dyn DebuggerTerminal) -> Result<i32> {
         let debuggee_cmd: Vec<&String> = vec![&run_opts.debuggee]
             .into_iter()
             .chain(run_opts.debuggee_args.iter())
@@ -222,7 +245,7 @@ impl<T: PidAttachableBinaryDebugger> Debugger for T {
         wait_until_exit(debuggee_pid)
     }
 
-    fn set(&mut self, set_opts: &SetOpts, terminal: &dyn DebuggerTerminal) -> Result<()> {
+    fn set(&mut self, set_opts: &SetOpts, terminal: &mut dyn DebuggerTerminal) -> Result<()> {
         set_to_exec_dgeee(set_opts, terminal)
     }
 
@@ -233,19 +256,26 @@ impl<T: PidAttachableBinaryDebugger> Debugger for T {
     fn build_attach_commandline(&self) -> Result<Vec<String>> {
         self.build_attach_commandline()
     }
+
+    fn build_attach_information(&self) -> Result<HashMap<AttachInformationKey, String>> {
+        self.build_attach_information()
+    }
 }
 
 struct GdbDebugger {
     debuggee_pid: unistd::Pid,
+    debuggee_path: String,
 }
 
 impl GdbDebugger {
-    fn new() -> Result<GdbDebugger> {
+    fn new(debuggee: &str) -> Result<GdbDebugger> {
+        let debuggee_abspath = get_valid_executable_path(debuggee, "debuggee")?;
         if !command_exists("gdb") {
             bail!("'gdb' is not in PATH. Did you install gdb?")
         }
         Ok(GdbDebugger {
             debuggee_pid: unistd::Pid::this(),
+            debuggee_path: debuggee_abspath,
         })
     }
 }
@@ -261,6 +291,17 @@ impl PidAttachableBinaryDebugger for GdbDebugger {
             "-p".to_owned(),
             self.debuggee_pid.as_raw().to_string(),
         ])
+    }
+
+    fn build_attach_information(&self) -> Result<HashMap<AttachInformationKey, String>> {
+        let mut info = HashMap::new();
+        info.insert(AttachInformationKey::DebuggerTypeHint, "gdb".to_owned());
+        info.insert(AttachInformationKey::Pid, format!("{}", self.debuggee_pid));
+        info.insert(
+            AttachInformationKey::ProgramName,
+            self.debuggee_path.clone(),
+        );
+        Ok(info)
     }
 }
 
@@ -291,6 +332,13 @@ impl PidAttachableBinaryDebugger for DelveDebugger {
             self.debuggee_pid.as_raw().to_string(),
         ])
     }
+
+    fn build_attach_information(&self) -> Result<HashMap<AttachInformationKey, String>> {
+        let mut info = HashMap::new();
+        info.insert(AttachInformationKey::DebuggerTypeHint, "go".to_owned());
+        info.insert(AttachInformationKey::Pid, format!("{}", self.debuggee_pid));
+        Ok(info)
+    }
 }
 
 struct StopAndWritePidDebugger;
@@ -302,7 +350,7 @@ impl StopAndWritePidDebugger {
 }
 
 impl Debugger for StopAndWritePidDebugger {
-    fn run(&mut self, run_opts: &RunOpts, _terminal: &dyn DebuggerTerminal) -> Result<i32> {
+    fn run(&mut self, run_opts: &RunOpts, _terminal: &mut dyn DebuggerTerminal) -> Result<i32> {
         let debuggee_cmd: Vec<&String> = vec![&run_opts.debuggee]
             .into_iter()
             .chain(run_opts.debuggee_args.iter())
@@ -319,7 +367,7 @@ impl Debugger for StopAndWritePidDebugger {
         wait_until_exit(debuggee_pid)
     }
 
-    fn set(&mut self, set_opts: &SetOpts, terminal: &dyn DebuggerTerminal) -> Result<()> {
+    fn set(&mut self, set_opts: &SetOpts, terminal: &mut dyn DebuggerTerminal) -> Result<()> {
         set_to_exec_dgeee(set_opts, terminal)
     }
 
@@ -328,12 +376,17 @@ impl Debugger for StopAndWritePidDebugger {
     }
 
     fn build_attach_commandline(&self) -> Result<Vec<String>> {
-        bail!("build_attach_commandline should not be called for StopAndWritePidDebugger");
+        bail!("[BUG] build_attach_commandline should not be called for StopAndWritePidDebugger");
+    }
+
+    fn build_attach_information(&self) -> Result<HashMap<AttachInformationKey, String>> {
+        bail!("[BUG] butild_attach_information should not be called for StopAndWritePidDebugger");
     }
 }
 
 struct PythonDebugger {
     python_command: String,
+    port: Option<i32>,
 }
 
 impl PythonDebugger {
@@ -358,18 +411,14 @@ impl PythonDebugger {
 
         Ok(PythonDebugger {
             python_command: python_path,
+            port: None,
         })
     }
 }
 
 impl Debugger for PythonDebugger {
-    fn run(&mut self, run_opts: &RunOpts, _terminal: &dyn DebuggerTerminal) -> Result<i32> {
-        print_message(
-            "The debuggee process is paused. Attach to it in VSCode. \
-                 VSCode is the only supported debugger for Python.",
-        );
-        print_message("Port: 5679");
-        print_message("This message is suppressed if the stderr is redirected or piped.");
+    fn run(&mut self, run_opts: &RunOpts, _terminal: &mut dyn DebuggerTerminal) -> Result<i32> {
+        self.port = Some(5679);
         let debuggee_args: Vec<&str> = vec![
             "-m",
             "debugpy",
@@ -381,16 +430,25 @@ impl Debugger for PythonDebugger {
         .into_iter()
         .chain(run_opts.debuggee_args.iter().map(|s| s.as_str()))
         .collect();
-        let exit_status = Command::new(&self.python_command)
+        let mut debugpy = Command::new(&self.python_command)
             .args(&debuggee_args)
-            .status()
+            .spawn()
             .with_context(|| "failed to launch debugpy. Perhaps is port 5679 being used?")?;
-        exit_status
-            .code()
-            .ok_or_else(|| anyhow!("ExitStatus.code() failed for an unexpected reason"))
+        // To wait for the child process, not being signalled by Ctrl+C.
+        // Ignore SIGINT after Command::spawn because spawn inherits the parent's signal handlers.
+        // This makes some gap between the timing when debugpy launched and the host starts to ignore SIGINT,
+        // but I'm doing this just due to laziness
+        ignore_sigint()?;
+
+        print_message("VSCode is the only supported debugger for Python.");
+        // Ignore the given _terminal since Python supports only Vscode
+        let mut vscode = build_debugger_terminal(&DebuggerTerminalOpt::Vscode);
+        vscode.open(self)?;
+
+        Ok(debugpy.wait()?.code().unwrap_or(EXITCODE_SIGNALLED))
     }
 
-    fn set(&mut self, _set_opts: &SetOpts, _terminal: &dyn DebuggerTerminal) -> Result<()> {
+    fn set(&mut self, _set_opts: &SetOpts, _terminal: &mut dyn DebuggerTerminal) -> Result<()> {
         bail!("set is not implemented yet for Python");
     }
 
@@ -399,7 +457,21 @@ impl Debugger for PythonDebugger {
     }
 
     fn build_attach_commandline(&self) -> Result<Vec<String>> {
-        bail!("build_attach_commandline should not be called for PythonDebugger");
+        bail!("[BUG] build_attach_commandline should not be called for PythonDebugger");
+    }
+
+    fn build_attach_information(&self) -> Result<HashMap<AttachInformationKey, String>> {
+        let mut info = HashMap::new();
+        info.insert(AttachInformationKey::DebuggerTypeHint, "python".to_owned());
+        info.insert(
+            AttachInformationKey::DebuggerPort,
+            format!(
+                "{}",
+                self.port
+                    .ok_or_else(|| anyhow!("[BUG] PythonDebugger.port is not initializaed"))?
+            ),
+        );
+        Ok(info)
     }
 }
 
@@ -428,7 +500,7 @@ impl TmuxLayout {
 }
 
 impl DebuggerTerminal for Tmux {
-    fn open(&self, debugger: &dyn Debugger) -> Result<()> {
+    fn open(&mut self, debugger: &dyn Debugger) -> Result<()> {
         let debugger_cmd = debugger.build_attach_commandline()?;
         let is_tmux_active = Command::new("tmux")
             .args(&["ls"])
@@ -460,7 +532,64 @@ impl DebuggerTerminal for Tmux {
     }
 }
 
-fn set_to_exec_dgeee(set_opts: &SetOpts, _terminal: &dyn DebuggerTerminal) -> Result<()> {
+struct VsCode {
+    attach_information_file: Option<NamedTempFile>,
+    fifo_path_for_attach_information_flie: String,
+}
+
+impl VsCode {
+    fn new() -> VsCode {
+        VsCode {
+            attach_information_file: None,
+            fifo_path_for_attach_information_flie: "/tmp/dbgee-vscode-debuggees".to_owned(),
+        }
+    }
+}
+
+impl DebuggerTerminal for VsCode {
+    fn open(&mut self, debugger: &dyn Debugger) -> Result<()> {
+        let mut attach_information_file = NamedTempFile::new()?;
+        let json = format!(
+            "{{{}}}",
+            debugger
+                .build_attach_information()?
+                .into_iter()
+                .map(|(key, val)| format!("\"{}\": \"{}\"", key, val))
+                .collect::<Vec<String>>()
+                .join(", ")
+        );
+        attach_information_file.write_all(json.as_bytes())?;
+
+        let attach_information_file_path = attach_information_file
+            .path()
+            .to_str()
+            .ok_or_else(|| anyhow!("Temporary Directory is in a non-UTF8 path"))?
+            .to_owned();
+        match unistd::mkfifo(
+            self.fifo_path_for_attach_information_flie.as_str(),
+            nix::sys::stat::Mode::S_IRWXU,
+        ) {
+            Err(nix::Error::Sys(nix::errno::Errno::EEXIST)) => Ok(()),
+            other => other,
+        }?;
+        let fifo_path_for_attach_information_flie =
+            self.fifo_path_for_attach_information_flie.clone();
+        std::thread::spawn(move || {
+            if let Ok(mut fifo) = File::create(fifo_path_for_attach_information_flie.as_str()) {
+                let _ = fifo.write(&attach_information_file_path.as_bytes());
+            }
+        });
+
+        self.attach_information_file = Some(attach_information_file);
+
+        print_message("The debuggee process is paused. Attach to it in VSCode");
+        print_message("This message is suppressed if the stderr is redirected or piped.");
+
+        Ok(())
+    }
+}
+
+fn set_to_exec_dgeee(set_opts: &SetOpts, _terminal: &mut dyn DebuggerTerminal) -> Result<()> {
     let clap_matches = Opts::clap().get_matches();
     let run_command = build_run_command(&clap_matches)?;
     wrap_debuggee_binary(&set_opts.debuggee, &run_command)?;
@@ -674,6 +803,8 @@ fn fork_exec_stop<T: AsRef<str>>(debuggee_cmd: &[T]) -> Result<unistd::Pid> {
         unistd::pipe2(nix::fcntl::OFlag::O_CLOEXEC).with_context(|| "pipe2 failed")?;
     let mut sync_pipe_read: File = unsafe { File::from_raw_fd(read_fd) };
     let mut sync_pipe_write: File = unsafe { File::from_raw_fd(write_fd) };
+    // To wait for the child process, not being signalled by Ctrl+C
+    ignore_sigint()?;
     match unsafe { unistd::fork().with_context(|| "fork failed.")? } {
         unistd::ForkResult::Child => {
             let mut buf = [0; 1];
@@ -701,7 +832,7 @@ fn fork_exec_stop<T: AsRef<str>>(debuggee_cmd: &[T]) -> Result<unistd::Pid> {
             match wait::waitpid(debuggee_pid, None)
                 .with_context(|| "Unexpected error. Waiting for SIGSTOP failed.")?
             {
-                wait::WaitStatus::Stopped(_, nix::sys::signal::SIGSTOP) => {}
+                wait::WaitStatus::Stopped(_, signal::SIGSTOP) => {}
                 other => {
                     eprintln!(
                         "The observed signal is not SISTOP, but dbgee continues. {:?}",
@@ -718,7 +849,7 @@ fn fork_exec_stop<T: AsRef<str>>(debuggee_cmd: &[T]) -> Result<unistd::Pid> {
                 wait::WaitStatus::Exited(_, _) => {
                     panic!("The process exited for an unexpected reason");
                 }
-                wait::WaitStatus::Stopped(_, nix::sys::signal::SIGTRAP) => {}
+                wait::WaitStatus::Stopped(_, signal::SIGTRAP) => {}
                 other => {
                     eprintln!(
                         "The observed signal is not SIGTRAP, but continues. {:?}",
@@ -727,8 +858,11 @@ fn fork_exec_stop<T: AsRef<str>>(debuggee_cmd: &[T]) -> Result<unistd::Pid> {
                 }
             }
 
-            ptrace::detach(debuggee_pid, nix::sys::signal::SIGSTOP)
+            ptrace::detach(debuggee_pid, signal::SIGSTOP)
                 .with_context(|| "Unexpected error. Detach and stop failed")?;
+
+            // Sleeping childs don't respond to SIGINT/SIGTERM. Kill them by SIGKILL for ergonomics
+            kill9_child_by_sigint(debuggee_pid)?;
 
             Ok(debuggee_pid)
         }
@@ -737,10 +871,33 @@ fn fork_exec_stop<T: AsRef<str>>(debuggee_cmd: &[T]) -> Result<unistd::Pid> {
 
 fn wait_until_exit(pid: unistd::Pid) -> Result<i32> {
     loop {
-        if let wait::WaitStatus::Exited(_, exit_status) = wait::waitpid(pid, None)? {
-            return Ok(exit_status);
+        match wait::waitpid(pid, None) {
+            Ok(wait::WaitStatus::Exited(_, exit_status)) => {
+                return Ok(exit_status);
+            }
+            Ok(wait::WaitStatus::Signaled(_, _, _)) => {
+                return Ok(EXITCODE_SIGNALLED);
+            }
+            Err(nix::Error::Sys(nix::errno::Errno::ECHILD)) => {
+                return Ok(0);
+            }
+            _ => (),
         }
     }
+}
+
+fn ignore_sigint() -> Result<()> {
+    unsafe {
+        signal::signal(signal::Signal::SIGINT, signal::SigHandler::SigIgn)?;
+    }
+    Ok(())
+}
+
+fn kill9_child_by_sigint(pid: unistd::Pid) -> Result<()> {
+    ctrlc::set_handler(move || {
+        let _ = signal::kill(pid, signal::Signal::SIGKILL);
+    })?;
+    Ok(())
 }
 
 fn print_error<T: AsRef<str>>(mes: T) {
