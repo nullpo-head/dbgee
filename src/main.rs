@@ -143,7 +143,7 @@ trait DebuggerTerminal {
 }
 
 #[derive(Debug, PartialEq, Eq, Hash, EnumString, Display)]
-#[strum(serialize_all = "snake_case")]
+#[strum(serialize_all = "camelCase")]
 enum AttachInformationKey {
     DebuggerTypeHint,
     Pid,
