@@ -17,6 +17,7 @@ use std::{path::PathBuf, str::FromStr};
 use anyhow::{anyhow, bail, Context, Result};
 use nix::sys::{ptrace, signal, wait};
 use nix::unistd;
+use nix::unistd::Pid;
 use once_cell::sync::Lazy;
 use structopt::clap::ArgMatches;
 use structopt::StructOpt;
@@ -132,7 +133,7 @@ pub enum DebuggerTerminalOpt {
 }
 
 trait Debugger {
-    fn run(&mut self, run_opts: &RunOpts, terminal: &mut dyn DebuggerTerminal) -> Result<i32>;
+    fn run(&mut self, run_opts: &RunOpts, terminal: &mut dyn DebuggerTerminal) -> Result<Pid>;
     fn set(&mut self, set_opts: &SetOpts, terminal: &mut dyn DebuggerTerminal) -> Result<()>;
     fn unset(&mut self, unset_opts: &UnsetOpts) -> Result<()>;
     fn build_attach_commandline(&self) -> Result<Vec<String>>;
@@ -183,18 +184,19 @@ fn run() -> Result<i32> {
     match opts.command {
         Subcommand::Run(run_opts) => {
             let mut debugger_terminal = build_debugger_terminal(&run_opts.attach_opts.terminal);
-            let exit_status = debugger.run(&run_opts, debugger_terminal.as_mut())?;
-            return Ok(exit_status);
+            let pid = debugger.run(&run_opts, debugger_terminal.as_mut())?;
+            Ok(wait_until_exit(pid)?)
         }
         Subcommand::Set(set_opts) => {
             let mut debugger_terminal = build_debugger_terminal(&set_opts.attach_opts.terminal);
             debugger.set(&set_opts, debugger_terminal.as_mut())?;
+            Ok(0)
         }
         Subcommand::Unset(unset_opts) => {
             debugger.unset(&unset_opts)?;
+            Ok(0)
         }
-    };
-    Ok(0)
+    }
 }
 
 fn build_debugger(debugger: &str, debuggee: &str) -> Result<Box<dyn Debugger>> {
@@ -233,14 +235,14 @@ fn build_debugger_terminal(action: &DebuggerTerminalOpt) -> Box<dyn DebuggerTerm
 trait PidAttachableBinaryDebugger {
     fn build_attach_commandline(&self) -> Result<Vec<String>>;
     fn build_attach_information(&self) -> Result<HashMap<AttachInformationKey, String>>;
-    fn set_debuggee_pid(&mut self, _pid: unistd::Pid) {}
+    fn set_debuggee_pid(&mut self, _pid: Pid) {}
     fn is_debuggee_surely_supported(&self, _debuggee: &str) -> Result<bool> {
         Ok(false)
     }
 }
 
 impl<T: PidAttachableBinaryDebugger> Debugger for T {
-    fn run(&mut self, run_opts: &RunOpts, terminal: &mut dyn DebuggerTerminal) -> Result<i32> {
+    fn run(&mut self, run_opts: &RunOpts, terminal: &mut dyn DebuggerTerminal) -> Result<Pid> {
         let debuggee_cmd: Vec<&String> = vec![&run_opts.debuggee]
             .into_iter()
             .chain(run_opts.debuggee_args.iter())
@@ -248,7 +250,7 @@ impl<T: PidAttachableBinaryDebugger> Debugger for T {
         let debuggee_pid = fork_exec_stop(&debuggee_cmd)?;
         self.set_debuggee_pid(debuggee_pid);
         terminal.open(self)?;
-        wait_until_exit(debuggee_pid)
+        Ok(debuggee_pid)
     }
 
     fn set(&mut self, set_opts: &SetOpts, terminal: &mut dyn DebuggerTerminal) -> Result<()> {
@@ -273,7 +275,7 @@ impl<T: PidAttachableBinaryDebugger> Debugger for T {
 }
 
 struct GdbDebugger {
-    debuggee_pid: unistd::Pid,
+    debuggee_pid: Pid,
     debuggee_path: String,
 }
 
@@ -284,14 +286,14 @@ impl GdbDebugger {
             bail!("'gdb' is not in PATH. Did you install gdb?")
         }
         Ok(GdbDebugger {
-            debuggee_pid: unistd::Pid::this(),
+            debuggee_pid: Pid::this(),
             debuggee_path: debuggee_abspath,
         })
     }
 }
 
 impl PidAttachableBinaryDebugger for GdbDebugger {
-    fn set_debuggee_pid(&mut self, pid: unistd::Pid) {
+    fn set_debuggee_pid(&mut self, pid: Pid) {
         self.debuggee_pid = pid;
     }
 
@@ -329,7 +331,7 @@ impl PidAttachableBinaryDebugger for GdbDebugger {
 }
 
 struct DelveDebugger {
-    debuggee_pid: unistd::Pid,
+    debuggee_pid: Pid,
 }
 
 impl DelveDebugger {
@@ -338,13 +340,13 @@ impl DelveDebugger {
             bail!("'dlv' is not in PATH. Did you install delve?")
         }
         Ok(DelveDebugger {
-            debuggee_pid: unistd::Pid::this(),
+            debuggee_pid: Pid::this(),
         })
     }
 }
 
 impl PidAttachableBinaryDebugger for DelveDebugger {
-    fn set_debuggee_pid(&mut self, pid: unistd::Pid) {
+    fn set_debuggee_pid(&mut self, pid: Pid) {
         self.debuggee_pid = pid;
     }
 
@@ -386,7 +388,7 @@ impl StopAndWritePidDebugger {
 }
 
 impl Debugger for StopAndWritePidDebugger {
-    fn run(&mut self, run_opts: &RunOpts, _terminal: &mut dyn DebuggerTerminal) -> Result<i32> {
+    fn run(&mut self, run_opts: &RunOpts, _terminal: &mut dyn DebuggerTerminal) -> Result<Pid> {
         let debuggee_cmd: Vec<&String> = vec![&run_opts.debuggee]
             .into_iter()
             .chain(run_opts.debuggee_args.iter())
@@ -400,7 +402,7 @@ impl Debugger for StopAndWritePidDebugger {
         print_message("This message is suppressed if the stderr is redirected or piped.");
         let mut pid_file = File::create("/tmp/dbgee_pid")?;
         write!(pid_file, "{}", debuggee_pid.as_raw())?;
-        wait_until_exit(debuggee_pid)
+        Ok(debuggee_pid)
     }
 
     fn set(&mut self, set_opts: &SetOpts, terminal: &mut dyn DebuggerTerminal) -> Result<()> {
@@ -457,7 +459,7 @@ impl PythonDebugger {
 }
 
 impl Debugger for PythonDebugger {
-    fn run(&mut self, run_opts: &RunOpts, _terminal: &mut dyn DebuggerTerminal) -> Result<i32> {
+    fn run(&mut self, run_opts: &RunOpts, _terminal: &mut dyn DebuggerTerminal) -> Result<Pid> {
         self.port = Some(5679);
         let debuggee_args: Vec<&str> = vec![
             "-m",
@@ -470,7 +472,7 @@ impl Debugger for PythonDebugger {
         .into_iter()
         .chain(run_opts.debuggee_args.iter().map(|s| s.as_str()))
         .collect();
-        let mut debugpy = Command::new(&self.python_command)
+        let debugpy = Command::new(&self.python_command)
             .args(&debuggee_args)
             .spawn()
             .with_context(|| "failed to launch debugpy. Perhaps is port 5679 being used?")?;
@@ -485,7 +487,7 @@ impl Debugger for PythonDebugger {
         let mut vscode = build_debugger_terminal(&DebuggerTerminalOpt::Vscode);
         vscode.open(self)?;
 
-        Ok(debugpy.wait()?.code().unwrap_or(EXITCODE_SIGNALLED))
+        Ok(Pid::from_raw(debugpy.id() as i32))
     }
 
     fn set(&mut self, _set_opts: &SetOpts, _terminal: &mut dyn DebuggerTerminal) -> Result<()> {
@@ -863,7 +865,7 @@ fn is_executable<P: AsRef<Path>>(path: P) -> bool {
     false
 }
 
-fn fork_exec_stop<T: AsRef<str>>(debuggee_cmd: &[T]) -> Result<unistd::Pid> {
+fn fork_exec_stop<T: AsRef<str>>(debuggee_cmd: &[T]) -> Result<Pid> {
     get_valid_executable_path(debuggee_cmd[0].as_ref(), "the debuggee")?;
     let (read_fd, write_fd) =
         unistd::pipe2(nix::fcntl::OFlag::O_CLOEXEC).with_context(|| "pipe2 failed")?;
@@ -935,7 +937,7 @@ fn fork_exec_stop<T: AsRef<str>>(debuggee_cmd: &[T]) -> Result<unistd::Pid> {
     }
 }
 
-fn wait_until_exit(pid: unistd::Pid) -> Result<i32> {
+fn wait_until_exit(pid: Pid) -> Result<i32> {
     loop {
         match wait::waitpid(pid, None) {
             Ok(wait::WaitStatus::Exited(_, exit_status)) => {
@@ -959,7 +961,7 @@ fn ignore_sigint() -> Result<()> {
     Ok(())
 }
 
-fn kill9_child_by_sigint(pid: unistd::Pid) -> Result<()> {
+fn kill9_child_by_sigint(pid: Pid) -> Result<()> {
     ctrlc::set_handler(move || {
         let _ = signal::kill(pid, signal::Signal::SIGKILL);
     })?;
