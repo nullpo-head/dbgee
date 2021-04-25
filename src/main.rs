@@ -1,8 +1,8 @@
-use std::io::Write;
 use std::path::Path;
 use std::{collections::HashMap, fs::File};
 use std::{env, fs};
 use std::{ffi::CString, io::Read};
+use std::{io::Write, sync::Mutex};
 use std::{
     io::{BufRead, BufReader},
     str,
@@ -17,6 +17,7 @@ use std::{path::PathBuf, str::FromStr};
 use anyhow::{anyhow, bail, Context, Result};
 use nix::sys::{ptrace, signal, wait};
 use nix::unistd;
+use once_cell::sync::Lazy;
 use structopt::clap::ArgMatches;
 use structopt::StructOpt;
 use strum::{Display, EnumString, EnumVariantNames, VariantNames as _};
@@ -136,6 +137,9 @@ trait Debugger {
     fn unset(&mut self, unset_opts: &UnsetOpts) -> Result<()>;
     fn build_attach_commandline(&self) -> Result<Vec<String>>;
     fn build_attach_information(&self) -> Result<HashMap<AttachInformationKey, String>>;
+    // Note that a debugger could support debuggee even if is_surely_supported_debuggee == false
+    // because Dbgee doesn't recognize all file types which each debugger supports.
+    fn is_debuggee_surely_supported(&self, debuggee: &str) -> Result<bool>;
 }
 
 trait DebuggerTerminal {
@@ -205,18 +209,17 @@ fn build_debugger(debugger: &str, debuggee: &str) -> Result<Box<dyn Debugger>> {
 }
 
 fn detect_debugger(debuggee: &str) -> Result<Box<dyn Debugger>> {
-    let file_output = Command::new("file").args(&[debuggee]).output()?;
-    let file_output = str::from_utf8(&file_output.stdout)?;
-    if file_output.contains("Go ") {
-        return Ok(Box::new(DelveDebugger::new()?));
+    for debugger in ["gdb", "dlv", "debugpy", "stop-and-write-pid"].iter() {
+        let candidate = build_debugger(debugger, debuggee);
+        if candidate.is_err() {
+            continue;
+        }
+        let candidate = candidate.unwrap();
+        if let Ok(true) = candidate.is_debuggee_surely_supported(debuggee) {
+            return Ok(candidate);
+        }
     }
-    if file_output.contains("ELF") {
-        return Ok(Box::new(GdbDebugger::new(debuggee)?));
-    }
-    if file_output.contains("Python") {
-        return Ok(Box::new(PythonDebugger::new()?));
-    }
-    bail!("Could not detect the language of the debuggee")
+    bail!("Could not automatically detect the proper debugger for the given debuggee")
 }
 
 fn build_debugger_terminal(action: &DebuggerTerminalOpt) -> Box<dyn DebuggerTerminal> {
@@ -230,7 +233,10 @@ fn build_debugger_terminal(action: &DebuggerTerminalOpt) -> Box<dyn DebuggerTerm
 trait PidAttachableBinaryDebugger {
     fn build_attach_commandline(&self) -> Result<Vec<String>>;
     fn build_attach_information(&self) -> Result<HashMap<AttachInformationKey, String>>;
-    fn set_debuggee_pid(&mut self, pid: unistd::Pid);
+    fn set_debuggee_pid(&mut self, _pid: unistd::Pid) {}
+    fn is_debuggee_surely_supported(&self, _debuggee: &str) -> Result<bool> {
+        Ok(false)
+    }
 }
 
 impl<T: PidAttachableBinaryDebugger> Debugger for T {
@@ -259,6 +265,10 @@ impl<T: PidAttachableBinaryDebugger> Debugger for T {
 
     fn build_attach_information(&self) -> Result<HashMap<AttachInformationKey, String>> {
         self.build_attach_information()
+    }
+
+    fn is_debuggee_surely_supported(&self, debuggee: &str) -> Result<bool> {
+        self.is_debuggee_surely_supported(debuggee)
     }
 }
 
@@ -303,6 +313,19 @@ impl PidAttachableBinaryDebugger for GdbDebugger {
         );
         Ok(info)
     }
+
+    fn is_debuggee_surely_supported(&self, debuggee: &str) -> Result<bool> {
+        let file_output = get_filetype_by_filecmd(debuggee)?;
+        if file_output.contains("ELF") {
+            return Ok(true);
+        }
+        if file_output.contains("shell") && check_if_wrapped(debuggee) {
+            return Ok(
+                get_filetype_by_filecmd(&get_debuggee_backup_name(debuggee))?.contains("ELF"),
+            );
+        }
+        Ok(false)
+    }
 }
 
 struct DelveDebugger {
@@ -338,6 +361,19 @@ impl PidAttachableBinaryDebugger for DelveDebugger {
         info.insert(AttachInformationKey::DebuggerTypeHint, "go".to_owned());
         info.insert(AttachInformationKey::Pid, format!("{}", self.debuggee_pid));
         Ok(info)
+    }
+
+    fn is_debuggee_surely_supported(&self, debuggee: &str) -> Result<bool> {
+        let file_output = get_filetype_by_filecmd(debuggee)?;
+        if file_output.contains("Go ") {
+            return Ok(true);
+        }
+        if file_output.contains("shell") && check_if_wrapped(debuggee) {
+            return Ok(
+                get_filetype_by_filecmd(&get_debuggee_backup_name(debuggee))?.contains("Go "),
+            );
+        }
+        Ok(false)
     }
 }
 
@@ -381,6 +417,10 @@ impl Debugger for StopAndWritePidDebugger {
 
     fn build_attach_information(&self) -> Result<HashMap<AttachInformationKey, String>> {
         bail!("[BUG] butild_attach_information should not be called for StopAndWritePidDebugger");
+    }
+
+    fn is_debuggee_surely_supported(&self, _debuggee: &str) -> Result<bool> {
+        Ok(true)
     }
 }
 
@@ -472,6 +512,14 @@ impl Debugger for PythonDebugger {
             ),
         );
         Ok(info)
+    }
+
+    fn is_debuggee_surely_supported(&self, debuggee: &str) -> Result<bool> {
+        let file_output = get_filetype_by_filecmd(debuggee)?;
+        if file_output.contains("Python") {
+            return Ok(true);
+        }
+        Ok(false)
     }
 }
 
@@ -742,6 +790,24 @@ fn reconstruct_flags(opts: &ArgMatches, positional_args: &[&str]) -> String {
 
 fn escape_single_quote(s: &str) -> String {
     s.replace("'", "'\"'\"'")
+}
+
+static FILE_CMD_OUTPUT_CACHE: Lazy<Mutex<HashMap<String, String>>> =
+    Lazy::new(|| Mutex::new(HashMap::new()));
+
+fn get_filetype_by_filecmd(path: &str) -> Result<String> {
+    let mut filecmd_cache = FILE_CMD_OUTPUT_CACHE
+        .lock()
+        .or(Err(anyhow!("Failed to acquire the lock for file command")))?;
+
+    if let Some(cached) = filecmd_cache.get(path) {
+        return Ok(cached.clone());
+    }
+
+    let file_output = Command::new("file").args(&[path]).output()?;
+    let file_output = str::from_utf8(&file_output.stdout)?;
+    filecmd_cache.insert(path.to_owned(), file_output.to_owned());
+    Ok(file_output.to_owned())
 }
 
 fn command_exists(command: &str) -> bool {
