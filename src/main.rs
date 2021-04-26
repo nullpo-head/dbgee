@@ -211,7 +211,7 @@ fn build_debugger(debugger: &str, debuggee: &str) -> Result<Box<dyn Debugger>> {
 }
 
 fn detect_debugger(debuggee: &str) -> Result<Box<dyn Debugger>> {
-    for debugger in ["gdb", "dlv", "debugpy", "stop-and-write-pid"].iter() {
+    for debugger in ["dlv", "gdb", "debugpy", "stop-and-write-pid"].iter() {
         let candidate = build_debugger(debugger, debuggee);
         if candidate.is_err() {
             continue;
@@ -313,7 +313,7 @@ impl Debugger for GdbDebugger {
 }
 
 struct DelveDebugger {
-    debuggee_pid: Option<Pid>,
+    port: Option<i32>,
 }
 
 impl DelveDebugger {
@@ -321,16 +321,29 @@ impl DelveDebugger {
         if !command_exists("dlv") {
             bail!("'dlv' is not in PATH. Did you install delve?")
         }
-        Ok(DelveDebugger { debuggee_pid: None })
+        Ok(DelveDebugger { port: None })
     }
 }
 
 impl Debugger for DelveDebugger {
     fn run(&mut self, run_opts: &RunOpts, terminal: &mut dyn DebuggerTerminal) -> Result<Pid> {
-        let debuggee_pid = run_and_stop_dbgee(run_opts)?;
-        self.debuggee_pid = Some(debuggee_pid);
+        self.port = Some(5679);
+        let debugger_args: Vec<&str> = vec![
+            "exec",
+            "--headless",
+            "--listen",
+            "localhost:5679",
+            &run_opts.debuggee,
+            "--",
+        ]
+        .into_iter()
+        .chain(run_opts.debuggee_args.iter().map(|s| s.as_str()))
+        .collect();
+
+        let pid = launch_debugger_server("dlv", &debugger_args)?;
         terminal.open(self)?;
-        Ok(debuggee_pid)
+
+        Ok(pid)
     }
 
     fn set(&mut self, set_opts: &SetOpts, terminal: &mut dyn DebuggerTerminal) -> Result<()> {
@@ -344,11 +357,12 @@ impl Debugger for DelveDebugger {
     fn build_attach_commandline(&self) -> Result<Vec<String>> {
         Ok(vec![
             "dlv".to_owned(),
-            "attach".to_owned(),
-            self.debuggee_pid
-                .ok_or_else(|| anyhow!("[BUG] uninitialized DelveDebugger"))?
-                .as_raw()
-                .to_string(),
+            "connect".to_owned(),
+            "localhost:".to_owned()
+                + &self
+                    .port
+                    .ok_or_else(|| anyhow!("[BUG] uninitialized DelveDebugger"))?
+                    .to_string(),
         ])
     }
 
@@ -356,12 +370,10 @@ impl Debugger for DelveDebugger {
         let mut info = HashMap::new();
         info.insert(AttachInformationKey::DebuggerTypeHint, "go".to_owned());
         info.insert(
-            AttachInformationKey::Pid,
-            format!(
-                "{}",
-                self.debuggee_pid
-                    .ok_or_else(|| anyhow!("[BUG] uninitialized DelveDebugger"))?
-            ),
+            AttachInformationKey::DebuggerPort,
+            self.port
+                .ok_or_else(|| anyhow!("[BUG] uninitialized DelveDebugger"))?
+                .to_string(),
         );
         Ok(info)
     }
@@ -458,7 +470,7 @@ impl PythonDebugger {
 impl Debugger for PythonDebugger {
     fn run(&mut self, run_opts: &RunOpts, _terminal: &mut dyn DebuggerTerminal) -> Result<Pid> {
         self.port = Some(5679);
-        let debuggee_args: Vec<&str> = vec![
+        let debugger_args: Vec<&str> = vec![
             "-m",
             "debugpy",
             "--wait-for-client",
@@ -469,22 +481,14 @@ impl Debugger for PythonDebugger {
         .into_iter()
         .chain(run_opts.debuggee_args.iter().map(|s| s.as_str()))
         .collect();
-        let debugpy = Command::new(&self.python_command)
-            .args(&debuggee_args)
-            .spawn()
-            .with_context(|| "failed to launch debugpy. Perhaps is port 5679 being used?")?;
-        // To wait for the child process, not being signalled by Ctrl+C.
-        // Ignore SIGINT after Command::spawn because spawn inherits the parent's signal handlers.
-        // This makes some gap between the timing when debugpy launched and the host starts to ignore SIGINT,
-        // but I'm doing this just due to laziness
-        ignore_sigint()?;
 
+        let pid = launch_debugger_server(&self.python_command, &debugger_args)?;
         print_message("VSCode is the only supported debugger for Python.");
         // Ignore the given _terminal since Python supports only Vscode
         let mut vscode = build_debugger_terminal(&DebuggerTerminalOpt::Vscode);
         vscode.open(self)?;
 
-        Ok(Pid::from_raw(debugpy.id() as i32))
+        Ok(pid)
     }
 
     fn set(&mut self, _set_opts: &SetOpts, _terminal: &mut dyn DebuggerTerminal) -> Result<()> {
@@ -636,12 +640,37 @@ impl DebuggerTerminal for VsCode {
     }
 }
 
+fn launch_debugger_server(debugger_path: &str, debugger_args: &[&str]) -> Result<Pid> {
+    let debugger = Command::new(debugger_path)
+        .args(debugger_args)
+        .spawn()
+        .with_context(|| {
+            anyhow!(
+                "failed to launch {}. Perhaps is port 5679 being used?",
+                debugger_path
+            )
+        })?;
+    // To wait for the child process, not being signalled by Ctrl+C.
+    // Ignore SIGINT after Command::spawn because spawn inherits the parent's signal handlers.
+    // This makes some gap between the timing when the debugger launched and the timing when the host started to ignore SIGINT,
+    // but I'm doing this just due to laziness
+    ignore_sigint()?;
+
+    // wait for the server to get ready
+    std::thread::sleep(std::time::Duration::from_secs(1));
+    Ok(Pid::from_raw(debugger.id() as i32))
+}
+
 fn run_and_stop_dbgee(run_opts: &RunOpts) -> Result<Pid> {
     let debuggee_cmd: Vec<&String> = vec![&run_opts.debuggee]
         .into_iter()
         .chain(run_opts.debuggee_args.iter())
         .collect();
+    // To wait for the child process, not being signalled by Ctrl+C
+    ignore_sigint()?;
     let debuggee_pid = fork_exec_stop(&debuggee_cmd)?;
+    // Sleeping childs don't respond to SIGINT/SIGTERM. Kill them by SIGKILL for ergonomics
+    kill9_child_by_sigint(debuggee_pid)?;
     Ok(debuggee_pid)
 }
 
@@ -877,8 +906,6 @@ fn fork_exec_stop<T: AsRef<str>>(debuggee_cmd: &[T]) -> Result<Pid> {
         unistd::pipe2(nix::fcntl::OFlag::O_CLOEXEC).with_context(|| "pipe2 failed")?;
     let mut sync_pipe_read: File = unsafe { File::from_raw_fd(read_fd) };
     let mut sync_pipe_write: File = unsafe { File::from_raw_fd(write_fd) };
-    // To wait for the child process, not being signalled by Ctrl+C
-    ignore_sigint()?;
     match unsafe { unistd::fork().with_context(|| "fork failed.")? } {
         unistd::ForkResult::Child => {
             let mut buf = [0; 1];
@@ -934,9 +961,6 @@ fn fork_exec_stop<T: AsRef<str>>(debuggee_cmd: &[T]) -> Result<Pid> {
 
             ptrace::detach(debuggee_pid, signal::SIGSTOP)
                 .with_context(|| "Unexpected error. Detach and stop failed")?;
-
-            // Sleeping childs don't respond to SIGINT/SIGTERM. Kill them by SIGKILL for ergonomics
-            kill9_child_by_sigint(debuggee_pid)?;
 
             Ok(debuggee_pid)
         }
