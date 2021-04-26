@@ -202,7 +202,7 @@ fn run() -> Result<i32> {
 fn build_debugger(debugger: &str, debuggee: &str) -> Result<Box<dyn Debugger>> {
     match debugger {
         "auto" => detect_debugger(debuggee),
-        "gdb" => Ok(Box::new(GdbDebugger::new(debuggee)?)),
+        "gdb" => Ok(Box::new(GdbDebugger::new()?)),
         "dlv" => Ok(Box::new(DelveDebugger::new()?)),
         "stop-and-write-pid" => Ok(Box::new(StopAndWritePidDebugger::new())),
         "debugpy" => Ok(Box::new(PythonDebugger::new()?)),
@@ -232,23 +232,29 @@ fn build_debugger_terminal(action: &DebuggerTerminalOpt) -> Box<dyn DebuggerTerm
     }
 }
 
-trait PidAttachableBinaryDebugger {
-    fn build_attach_commandline(&self) -> Result<Vec<String>>;
-    fn build_attach_information(&self) -> Result<HashMap<AttachInformationKey, String>>;
-    fn set_debuggee_pid(&mut self, _pid: Pid) {}
-    fn is_debuggee_surely_supported(&self, _debuggee: &str) -> Result<bool> {
-        Ok(false)
+struct GdbDebugger {
+    debuggee_pid: Option<Pid>,
+    debuggee_path: Option<String>,
+}
+
+impl GdbDebugger {
+    fn new() -> Result<GdbDebugger> {
+        if !command_exists("gdb") {
+            bail!("'gdb' is not in PATH. Did you install gdb?")
+        }
+        Ok(GdbDebugger {
+            debuggee_pid: None,
+            debuggee_path: None,
+        })
     }
 }
 
-impl<T: PidAttachableBinaryDebugger> Debugger for T {
+impl Debugger for GdbDebugger {
     fn run(&mut self, run_opts: &RunOpts, terminal: &mut dyn DebuggerTerminal) -> Result<Pid> {
-        let debuggee_cmd: Vec<&String> = vec![&run_opts.debuggee]
-            .into_iter()
-            .chain(run_opts.debuggee_args.iter())
-            .collect();
-        let debuggee_pid = fork_exec_stop(&debuggee_cmd)?;
-        self.set_debuggee_pid(debuggee_pid);
+        let debuggee_abspath = get_valid_executable_path(&run_opts.debuggee, "debuggee")?;
+        let debuggee_pid = run_and_stop_dbgee(run_opts)?;
+        self.debuggee_pid = Some(debuggee_pid);
+        self.debuggee_path = Some(debuggee_abspath);
         terminal.open(self)?;
         Ok(debuggee_pid)
     }
@@ -262,56 +268,32 @@ impl<T: PidAttachableBinaryDebugger> Debugger for T {
     }
 
     fn build_attach_commandline(&self) -> Result<Vec<String>> {
-        self.build_attach_commandline()
-    }
-
-    fn build_attach_information(&self) -> Result<HashMap<AttachInformationKey, String>> {
-        self.build_attach_information()
-    }
-
-    fn is_debuggee_surely_supported(&self, debuggee: &str) -> Result<bool> {
-        self.is_debuggee_surely_supported(debuggee)
-    }
-}
-
-struct GdbDebugger {
-    debuggee_pid: Pid,
-    debuggee_path: String,
-}
-
-impl GdbDebugger {
-    fn new(debuggee: &str) -> Result<GdbDebugger> {
-        let debuggee_abspath = get_valid_executable_path(debuggee, "debuggee")?;
-        if !command_exists("gdb") {
-            bail!("'gdb' is not in PATH. Did you install gdb?")
-        }
-        Ok(GdbDebugger {
-            debuggee_pid: Pid::this(),
-            debuggee_path: debuggee_abspath,
-        })
-    }
-}
-
-impl PidAttachableBinaryDebugger for GdbDebugger {
-    fn set_debuggee_pid(&mut self, pid: Pid) {
-        self.debuggee_pid = pid;
-    }
-
-    fn build_attach_commandline(&self) -> Result<Vec<String>> {
         Ok(vec![
             "gdb".to_owned(),
             "-p".to_owned(),
-            self.debuggee_pid.as_raw().to_string(),
+            self.debuggee_pid
+                .ok_or_else(|| anyhow!("[BUG] uninitialized GdbDebugger"))?
+                .as_raw()
+                .to_string(),
         ])
     }
 
     fn build_attach_information(&self) -> Result<HashMap<AttachInformationKey, String>> {
         let mut info = HashMap::new();
         info.insert(AttachInformationKey::DebuggerTypeHint, "gdb".to_owned());
-        info.insert(AttachInformationKey::Pid, format!("{}", self.debuggee_pid));
+        info.insert(
+            AttachInformationKey::Pid,
+            format!(
+                "{}",
+                self.debuggee_pid
+                    .ok_or_else(|| anyhow!("[BUG] uninitialized GdbDebugger"))?
+            ),
+        );
         info.insert(
             AttachInformationKey::ProgramName,
-            self.debuggee_path.clone(),
+            self.debuggee_path
+                .clone()
+                .ok_or_else(|| anyhow!("[BUG] uninitialized GdbDebugger"))?,
         );
         Ok(info)
     }
@@ -331,7 +313,7 @@ impl PidAttachableBinaryDebugger for GdbDebugger {
 }
 
 struct DelveDebugger {
-    debuggee_pid: Pid,
+    debuggee_pid: Option<Pid>,
 }
 
 impl DelveDebugger {
@@ -339,29 +321,48 @@ impl DelveDebugger {
         if !command_exists("dlv") {
             bail!("'dlv' is not in PATH. Did you install delve?")
         }
-        Ok(DelveDebugger {
-            debuggee_pid: Pid::this(),
-        })
+        Ok(DelveDebugger { debuggee_pid: None })
     }
 }
 
-impl PidAttachableBinaryDebugger for DelveDebugger {
-    fn set_debuggee_pid(&mut self, pid: Pid) {
-        self.debuggee_pid = pid;
+impl Debugger for DelveDebugger {
+    fn run(&mut self, run_opts: &RunOpts, terminal: &mut dyn DebuggerTerminal) -> Result<Pid> {
+        let debuggee_pid = run_and_stop_dbgee(run_opts)?;
+        self.debuggee_pid = Some(debuggee_pid);
+        terminal.open(self)?;
+        Ok(debuggee_pid)
+    }
+
+    fn set(&mut self, set_opts: &SetOpts, terminal: &mut dyn DebuggerTerminal) -> Result<()> {
+        set_to_exec_dgeee(set_opts, terminal)
+    }
+
+    fn unset(&mut self, unset_opts: &UnsetOpts) -> Result<()> {
+        unset_from_exec_dbgee(unset_opts)
     }
 
     fn build_attach_commandline(&self) -> Result<Vec<String>> {
         Ok(vec![
             "dlv".to_owned(),
             "attach".to_owned(),
-            self.debuggee_pid.as_raw().to_string(),
+            self.debuggee_pid
+                .ok_or_else(|| anyhow!("[BUG] uninitialized DelveDebugger"))?
+                .as_raw()
+                .to_string(),
         ])
     }
 
     fn build_attach_information(&self) -> Result<HashMap<AttachInformationKey, String>> {
         let mut info = HashMap::new();
         info.insert(AttachInformationKey::DebuggerTypeHint, "go".to_owned());
-        info.insert(AttachInformationKey::Pid, format!("{}", self.debuggee_pid));
+        info.insert(
+            AttachInformationKey::Pid,
+            format!(
+                "{}",
+                self.debuggee_pid
+                    .ok_or_else(|| anyhow!("[BUG] uninitialized DelveDebugger"))?
+            ),
+        );
         Ok(info)
     }
 
@@ -389,11 +390,7 @@ impl StopAndWritePidDebugger {
 
 impl Debugger for StopAndWritePidDebugger {
     fn run(&mut self, run_opts: &RunOpts, _terminal: &mut dyn DebuggerTerminal) -> Result<Pid> {
-        let debuggee_cmd: Vec<&String> = vec![&run_opts.debuggee]
-            .into_iter()
-            .chain(run_opts.debuggee_args.iter())
-            .collect();
-        let debuggee_pid = fork_exec_stop(&debuggee_cmd)?;
+        let debuggee_pid = run_and_stop_dbgee(run_opts)?;
         print_message("The debuggee process is paused. Atach a debugger to it by PID.");
         print_message(&format!(
             "PID: {}. It's also written to /tmp/dbgee_pid as a plain text number.",
@@ -637,6 +634,15 @@ impl DebuggerTerminal for VsCode {
 
         Ok(())
     }
+}
+
+fn run_and_stop_dbgee(run_opts: &RunOpts) -> Result<Pid> {
+    let debuggee_cmd: Vec<&String> = vec![&run_opts.debuggee]
+        .into_iter()
+        .chain(run_opts.debuggee_args.iter())
+        .collect();
+    let debuggee_pid = fork_exec_stop(&debuggee_cmd)?;
+    Ok(debuggee_pid)
 }
 
 fn set_to_exec_dgeee(set_opts: &SetOpts, _terminal: &mut dyn DebuggerTerminal) -> Result<()> {
