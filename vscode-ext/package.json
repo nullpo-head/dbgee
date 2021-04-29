@@ -1,0 +1,216 @@
+{
+    "name": "dbgee",
+    "displayName": "vscode-dbgee",
+    "description": "",
+    "version": "0.0.1",
+    "publisher": "nullpo-head",
+    "engines": {
+        "vscode": "^1.55.0"
+    },
+    "categories": [
+        "Other"
+    ],
+    "activationEvents": [
+        "onDebug",
+        "onCommand:dbgee.getPid",
+        "onCommand:dbgee.getDebuggerPort",
+        "onCommand:dbgee.getProgramName"
+    ],
+    "main": "./out/extension.js",
+    "contributes": {
+        "commands": [
+            {
+                "command": "dbgee.getPid",
+                "title": "Dbgee: Get the PID of the debuggee"
+            },
+            {
+                "command": "dbgee.getDebuggerPort",
+                "title": "Dbgee: Get the port number which the debugger listens"
+            },
+            {
+                "command": "dbgee.getProgramName",
+                "title": "Dbgee: Get the program name of the debuggee"
+            }
+        ],
+        "debuggers": [
+            {
+                "type": "vscode-dbgee-codelldb",
+                "label": "Dbgee: Attach to a debuggee via CodeLLDB",
+                "languages": [
+                    "ada",
+                    "arm",
+                    "asm",
+                    "c",
+                    "cpp",
+                    "crystal",
+                    "fortran-modern",
+                    "fortran",
+                    "nim",
+                    "objective-c",
+                    "objective-cpp",
+                    "objectpascal",
+                    "pascal",
+                    "rust"
+                ],
+                "configurationAttributes": {},
+                "initialConfigurations": [
+                    {
+                        "type": "lldb",
+                        "request": "attach",
+                        "name": "Attach to Dbgee",
+                        "pid": "${command:dbgee.getPid}"
+                    }
+                ],
+                "configurationSnippets": [
+                    {
+                        "label": "Dbgee: Attach to a debuggee via CodeLLDB",
+                        "description": "Dbgee: Attach to a debuggee via CodeLLDB",
+                        "body": {
+                            "name": "Dbgee: Attach to a debuggee via CodeLLDB",
+                            "type": "lldb",
+                            "request": "attach",
+                            "pid": "^\"\\${command:dbgee.getPid}\""
+                        }
+                    }
+                ]
+            },
+            {
+                "type": "vscode-dbgee-python",
+                "label": "Dbgee: Attach to a Python debuggee",
+                "languages": [
+                    "python"
+                ],
+                "configurationAttributes": {},
+                "initialConfigurations": [
+                    {
+                        "name": "Dbgee: Attach to a Python debuggee",
+                        "type": "python",
+                        "request": "attach",
+                        "connect": {
+                            "host": "localhost",
+                            "port": "${command:dbgee.getDebuggerPort}"
+                        }
+                    }
+                ],
+                "configurationSnippets": [
+                    {
+                        "label": "Dbgee: Attach to a Python debuggee",
+                        "description": "Dbgee: Attach to a Python debuggee",
+                        "body": {
+                            "name": "Dbgee: Attach to a Python debuggee",
+                            "type": "python",
+                            "request": "attach",
+                            "connect": {
+                                "host": "localhost",
+                                "port": "^\"\\${command:dbgee.getDebuggerPort}\""
+                            }
+                        }
+                    }
+                ]
+            },
+            {
+                "type": "vscode-dbgee-go",
+                "label": "Dbgee: Attach to a Golang debuggee",
+                "languages": [
+                    "go"
+                ],
+                "configurationAttributes": {},
+                "initialConfigurations": [
+                    {
+                        "name": "Dbgee: Attach to a Golang debuggee",
+                        "type": "go",
+                        "request": "attach",
+                        "mode": "remote",
+                        "remotePath": "${workspaceFolder}",
+                        "cwd": "${workspaceFolder}",
+                        "port": "${command:dbgee.getDebuggerPort}",
+                        "host": "127.0.0.1"
+                    }
+                ],
+                "configurationSnippets": [
+                    {
+                        "label": "Dbgee: Attach to a Golang debuggee",
+                        "description": "Dbgee: Attach to a Golang debuggee",
+                        "body": {
+                            "name": "Dbgee: Attach to a Golang debuggee",
+                            "type": "go",
+                            "request": "attach",
+                            "mode": "remote",
+                            "remotePath": "^\"\\${workspaceFolder}\"",
+                            "cwd": "${workspaceFolder}",
+                            "port": "^\"\\${command:dbgee.getDebuggerPort}\"",
+                            "host": "127.0.0.1"
+                        }
+                    }
+                ]
+            },
+            {
+                "type": "vscode-dbgee-cppdbg",
+                "label": "Dbgee: (gdb) Attach to a C/C++ debuggee via cppdbg",
+                "languages": [
+                    "c",
+                    "cpp"
+                ],
+                "configurationAttributes": {},
+                "initialConfigurations": [
+                    {
+                        "name": "Dbgee: (gdb) Attach to a C/C++ debuggee via cppdbg",
+                        "type": "cppdbg",
+                        "request": "attach",
+                        "program": "${command:dbgee.getProgramName}",
+                        "processId": "${command:dbgee.getPid}",
+                        "MIMode": "gdb",
+                        "setupCommands": [
+                            {
+                                "description": "Enable pretty-printing for gdb",
+                                "text": "-enable-pretty-printing",
+                                "ignoreFailures": true
+                            }
+                        ]
+                    }
+                ],
+                "configurationSnippets": [
+                    {
+                        "label": "Dbgee: Attach to a C/C++ debuggee",
+                        "description": "Dbgee: Attach to a C/C++ debuggee",
+                        "body": {
+                            "name": "Dbgee: (gdb) Attach to a C/C++ debuggee via cppdbg",
+                            "type": "cppdbg",
+                            "request": "attach",
+                            "program": "^\"\\${command:dbgee.getProgramName}\"",
+                            "processId": "^\"\\${command:dbgee.getPid}\"",
+                            "MIMode": "gdb",
+                            "setupCommands": [
+                                {
+                                    "description": "Enable pretty-printing for gdb",
+                                    "text": "-enable-pretty-printing",
+                                    "ignoreFailures": true
+                                }
+                            ]
+                        }
+                    }
+                ]
+            }
+        ]
+    },
+    "scripts": {
+        "vscode:prepublish": "yarn run compile",
+        "compile": "tsc -p ./",
+        "watch": "tsc -watch -p ./",
+        "pretest": "yarn run compile && yarn run lint",
+        "lint": "eslint src --ext ts"
+    },
+    "devDependencies": {
+        "@types/vscode": "^1.55.0",
+        "@types/glob": "^7.1.3",
+        "@types/mocha": "^8.0.4",
+        "@types/node": "^12.11.7",
+        "eslint": "^7.19.0",
+        "@typescript-eslint/eslint-plugin": "^4.14.1",
+        "@typescript-eslint/parser": "^4.14.1",
+        "glob": "^7.1.6",
+        "mocha": "^8.2.1",
+        "typescript": "^4.1.3",
+        "vscode-test": "^1.5.0"
+    }
+}
