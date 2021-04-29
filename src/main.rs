@@ -202,7 +202,8 @@ fn run() -> Result<i32> {
 fn build_debugger(debugger: &str, debuggee: &str) -> Result<Box<dyn Debugger>> {
     match debugger {
         "auto" => detect_debugger(debuggee),
-        "gdb" => Ok(Box::new(GdbDebugger::new()?)),
+        "gdb" => Ok(Box::new(GdbDebugger::build()?)),
+        "lldb" => Ok(Box::new(LldbDebugger::build()?)),
         "dlv" => Ok(Box::new(DelveDebugger::new()?)),
         "stop-and-write-pid" => Ok(Box::new(StopAndWritePidDebugger::new())),
         "debugpy" => Ok(Box::new(PythonDebugger::new()?)),
@@ -211,6 +212,7 @@ fn build_debugger(debugger: &str, debuggee: &str) -> Result<Box<dyn Debugger>> {
 }
 
 fn detect_debugger(debuggee: &str) -> Result<Box<dyn Debugger>> {
+    // lldb omitted in favor of gdb
     for debugger in ["dlv", "gdb", "debugpy", "stop-and-write-pid"].iter() {
         let candidate = build_debugger(debugger, debuggee);
         if candidate.is_err() {
@@ -232,24 +234,65 @@ fn build_debugger_terminal(action: &DebuggerTerminalOpt) -> Box<dyn DebuggerTerm
     }
 }
 
-struct GdbDebugger {
-    debuggee_pid: Option<Pid>,
-    debuggee_path: Option<String>,
-}
+struct GdbDebugger;
 
 impl GdbDebugger {
-    fn new() -> Result<GdbDebugger> {
-        if !command_exists("gdb") {
-            bail!("'gdb' is not in PATH. Did you install gdb?")
+    fn build() -> Result<GdbCompatibleDebugger> {
+        let command_builder = |pid: Pid, _name: String| {
+            Ok(vec![
+                "gdb".to_owned(),
+                "-p".to_owned(),
+                pid.as_raw().to_string(),
+            ])
+        };
+        GdbCompatibleDebugger::new("gdb", Box::new(command_builder))
+    }
+}
+
+struct LldbDebugger;
+
+impl LldbDebugger {
+    fn build() -> Result<GdbCompatibleDebugger> {
+        let command_builder = |pid: Pid, _name: String| {
+            Ok(vec![
+                "lldb".to_owned(),
+                "-p".to_owned(),
+                pid.as_raw().to_string(),
+            ])
+        };
+        GdbCompatibleDebugger::new("lldb", Box::new(command_builder))
+    }
+}
+
+struct GdbCompatibleDebugger {
+    debugger_name: String,
+    debuggee_pid: Option<Pid>,
+    debuggee_path: Option<String>,
+    commandline_builder: Box<dyn Fn(Pid, String) -> Result<Vec<String>>>,
+}
+
+impl GdbCompatibleDebugger {
+    fn new(
+        debugger_name: &str,
+        command_builder: Box<dyn Fn(Pid, String) -> Result<Vec<String>>>,
+    ) -> Result<GdbCompatibleDebugger> {
+        if !command_exists(debugger_name) {
+            bail!(
+                "'{}' is not in PATH. Did you install {}?",
+                debugger_name,
+                debugger_name
+            )
         }
-        Ok(GdbDebugger {
+        Ok(GdbCompatibleDebugger {
+            debugger_name: debugger_name.to_owned(),
             debuggee_pid: None,
             debuggee_path: None,
+            commandline_builder: command_builder,
         })
     }
 }
 
-impl Debugger for GdbDebugger {
+impl Debugger for GdbCompatibleDebugger {
     fn run(&mut self, run_opts: &RunOpts, terminal: &mut dyn DebuggerTerminal) -> Result<Pid> {
         let debuggee_abspath = get_valid_executable_path(&run_opts.debuggee, "debuggee")?;
         let debuggee_pid = run_and_stop_dbgee(run_opts)?;
@@ -268,32 +311,39 @@ impl Debugger for GdbDebugger {
     }
 
     fn build_attach_commandline(&self) -> Result<Vec<String>> {
-        Ok(vec![
-            "gdb".to_owned(),
-            "-p".to_owned(),
+        (self.commandline_builder)(
             self.debuggee_pid
-                .ok_or_else(|| anyhow!("[BUG] uninitialized GdbDebugger"))?
-                .as_raw()
-                .to_string(),
-        ])
+                .ok_or_else(|| anyhow!("[BUG] uninitialized GdbCompatibleDebugger"))?,
+            self.debuggee_path
+                .clone()
+                .ok_or_else(|| anyhow!("[BUG] uninitialized GdbCompatibleDebugger"))?,
+        )
     }
 
     fn build_attach_information(&self) -> Result<HashMap<AttachInformationKey, String>> {
         let mut info = HashMap::new();
-        info.insert(AttachInformationKey::DebuggerTypeHint, "gdb".to_owned());
+        info.insert(
+            AttachInformationKey::DebuggerTypeHint,
+            self.debugger_name.clone(),
+        );
         info.insert(
             AttachInformationKey::Pid,
             format!(
                 "{}",
-                self.debuggee_pid
-                    .ok_or_else(|| anyhow!("[BUG] uninitialized GdbDebugger"))?
+                self.debuggee_pid.ok_or_else(|| anyhow!(
+                    "[BUG] uninitialized GdbCompatibleDebugger: {}",
+                    self.debugger_name
+                ))?
             ),
         );
         info.insert(
             AttachInformationKey::ProgramName,
-            self.debuggee_path
-                .clone()
-                .ok_or_else(|| anyhow!("[BUG] uninitialized GdbDebugger"))?,
+            self.debuggee_path.clone().ok_or_else(|| {
+                anyhow!(
+                    "[BUG] uninitialized GdbCompatibleDebugger: {}",
+                    self.debugger_name
+                )
+            })?,
         );
         Ok(info)
     }
@@ -835,7 +885,7 @@ static FILE_CMD_OUTPUT_CACHE: Lazy<Mutex<HashMap<String, String>>> =
 fn get_filetype_by_filecmd(path: &str) -> Result<String> {
     let mut filecmd_cache = FILE_CMD_OUTPUT_CACHE
         .lock()
-        .or(Err(anyhow!("Failed to acquire the lock for file command")))?;
+        .map_err(|_| anyhow!("Failed to acquire the lock for file command"))?;
 
     if let Some(cached) = filecmd_cache.get(path) {
         return Ok(cached.clone());
@@ -1038,7 +1088,7 @@ mod tests {
 
     #[test]
     fn test_check_if_wrapperd_by_actually_wrapping() {
-        let tmpfile = make_temp_file("dummy");
+        let tmpfile = make_temp_executable_file("dummy");
         let tmpfile_path = tmpfile.path().to_str().unwrap();
         wrap_debuggee_binary(tmpfile_path, "dummy run -- debuggee").unwrap();
         assert!(check_if_wrapped(tmpfile.path()));
@@ -1048,7 +1098,7 @@ mod tests {
 
     #[test]
     fn test_double_wrapping() {
-        let tmpfile = make_temp_file("dummy");
+        let tmpfile = make_temp_executable_file("dummy");
         let tmpfile_path = tmpfile.path().to_str().unwrap();
         wrap_debuggee_binary(tmpfile_path, "dummy run -- debuggee").unwrap();
         assert!(wrap_debuggee_binary(tmpfile_path, "dummy run -- debuggee").is_err());
@@ -1056,7 +1106,7 @@ mod tests {
 
     #[test]
     fn test_double_unwrapping() {
-        let tmpfile = make_temp_file("dummy");
+        let tmpfile = make_temp_executable_file("dummy");
         let tmpfile_path = tmpfile.path().to_str().unwrap();
         wrap_debuggee_binary(tmpfile_path, "dummy run -- debuggee").unwrap();
         unwrap_debuggee_binary(tmpfile_path).unwrap();
