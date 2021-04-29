@@ -381,6 +381,9 @@ impl Debugger for DelveDebugger {
         let debugger_args: Vec<&str> = vec![
             "exec",
             "--headless",
+            "--log-dest",
+            "/dev/null",
+            "--api-version=2",
             "--listen",
             "localhost:5679",
             &run_opts.debuggee,
