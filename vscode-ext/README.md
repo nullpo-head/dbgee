@@ -1,4 +1,4 @@
-# dbgee README
+# Dbgee VSCode Extension
 
 This is the README for your extension "dbgee". After writing up a brief description, we recommend including the following sections.
 
