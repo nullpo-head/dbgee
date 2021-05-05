@@ -6,7 +6,7 @@ use debugger::Debugger;
 use debugger_terminal::{DebuggerTerminal, Tmux, TmuxLayout, VsCode};
 use file_helper::is_executable;
 
-use std::{os::unix::process, str};
+use std::str;
 
 use anyhow::{anyhow, bail, Result};
 use nix::sys::wait;
