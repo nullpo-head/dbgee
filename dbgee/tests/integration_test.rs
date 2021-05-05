@@ -170,7 +170,9 @@ fn test_run_for_vscode() -> Result<()> {
     // read from the fifo in a thread with timtout because it may block if there's a bug
     let (sender, receiver) = std::sync::mpsc::channel();
     std::thread::spawn(move || {
-        let mut file = fs::File::open("/tmp/dbgee-vscode-debuggees").unwrap();
+        let fifo_path = "/tmp/dbgee-vscode-debuggees";
+        let _ = unistd::mkfifo(fifo_path, nix::sys::stat::Mode::S_IRWXU);
+        let mut file = fs::File::open(fifo_path).unwrap();
         //let json = fs::read_to_string("/tmp/dbgee-vscode-debuggees").unwrap();
         let mut json = String::new();
         file.read_to_string(&mut json).unwrap();
