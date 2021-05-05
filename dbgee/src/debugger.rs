@@ -615,6 +615,7 @@ fn fork_exec_stop<T: AsRef<str>>(debuggee_cmd: &[T]) -> Result<Pid> {
             child: debuggee_pid,
         } => {
             ptrace::attach(debuggee_pid).with_context(|| {
+                let _ = signal::kill(debuggee_pid, signal::SIGKILL);
                 "ptrace attach failed. Perhaps dgbee is being traced by some debugger?"
             })?;
             let buf = [0; 1];
