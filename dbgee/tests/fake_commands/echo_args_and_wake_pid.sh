@@ -10,12 +10,6 @@ for arg in "$@"; do
   elif [ "$is_pid" = 1 ]; then
     is_pid=0
     pid="$arg"
-
-    # the command sleeping may need multiple SIGCONT
-    kill -s CONT "$pid" || true
-    kill -s CONT "$pid" || true
-    kill -s CONT "$pid" || true
-
     # print <NUM> to enable assertion with the output
     printf "'<NUM>' "
     continue
@@ -25,3 +19,10 @@ for arg in "$@"; do
 done
 
 printf '\n'
+
+
+# Wake the sleeping command.
+# the command sleeping may need multiple SIGCONT
+kill -s CONT "$pid" || true
+kill -s CONT "$pid" || true
+kill -s CONT "$pid" || true
