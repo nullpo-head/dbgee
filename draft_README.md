@@ -48,7 +48,8 @@ You can manually specify your preferred debugger by the global `-d` option.
 dbgee -d lldb run -- ./program arg0 arg1 arg2...
 ```
 
-By `-t` option of `run`, you can choose where you launch a debugger. Please see the help for detail.
+`dbgee` launches a debugger in a new tmux window unless you run `dbgee` in an integrated terminal in VSCode.
+However, you can choose other options by specifying `-t` option. Please see the help for more information.
 
 ```shell
 dbgee run -t tmuxp -- ./program  arg0 arg1 arg2... # launch a debugger in a new tmux pane instead of a window
@@ -56,8 +57,15 @@ dbgee run -t tmuxp -- ./program  arg0 arg1 arg2... # launch a debugger in a new 
 
 #### Debug your program in VSCode
 
-Use `-t vscode` option to make `dbgee` wait for VSCode to connect to your program.
+`dbgee` launches the given debuggee and wait for VSCode to connect to your program
+if `dbgee` is running in a VSCode's integrated terminal.
 Run the following command, and attach to your program in VSCode as the following video.
+
+```shell
+dbgee run -- ./program arg0 arg1 arg2...
+```
+
+Or, you can use `-t vscode` option to explicitly make `dbgee` wait for VSCode.
 
 ```shell
 dbgee run -t vscode -- ./program arg0 arg1 arg2...
@@ -85,10 +93,4 @@ If you specify some to launch your program, `dbgee` automatically runs `unset` a
 
 ```shell
 dbgee set ./program -- ./some_startup_script
-```
-
-To use VSCode instead of CLI debuggers, please specify `-t` option.
-
-```shell
-dbgee set -t vscode ./program
 ```

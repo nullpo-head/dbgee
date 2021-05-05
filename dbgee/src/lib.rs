@@ -6,13 +6,14 @@ use debugger::Debugger;
 use debugger_terminal::{DebuggerTerminal, Tmux, TmuxLayout, VsCode};
 use file_helper::is_executable;
 
-use std::str;
+use std::{os::unix::process, str};
 
 use anyhow::{anyhow, bail, Result};
 use nix::sys::wait;
 use nix::unistd::Pid;
 use structopt::StructOpt;
 use strum::{EnumString, EnumVariantNames, VariantNames as _};
+use sysinfo::{ProcessExt, SystemExt};
 
 use crate::debugger::{
     DelveDebugger, GdbDebugger, LldbDebugger, PythonDebugger, StopAndWritePidDebugger,
@@ -100,7 +101,10 @@ pub struct UnsetOpts {
 pub struct AttachOpts {
     /// Terminal to launch the debugger in.
     ///
-    /// tmuxw (default): Opens a new tmux window in last active tmux session,
+    /// auto (default): choose 'vscode' if dbgee is running in an integrated terminal,
+    /// choose 'tmuxw' otherwise.
+    ///
+    /// tmuxw: Opens a new tmux window in last active tmux session,
     /// launches a debugger there, and has the debugger attach to the debuggee.
     /// If there is no active tmux session, it launches a new session in the background,
     /// and writes a notification to stderr (as far as stderr is a tty).
@@ -113,7 +117,7 @@ pub struct AttachOpts {
         short,
         long,
         possible_values(DebuggerTerminalOpt::VARIANTS),
-        default_value("tmuxw")
+        default_value("auto")
     )]
     pub terminal: DebuggerTerminalOpt,
 }
@@ -121,6 +125,7 @@ pub struct AttachOpts {
 #[derive(Debug, EnumString, EnumVariantNames)]
 #[strum(serialize_all = "kebab-case")]
 pub enum DebuggerTerminalOpt {
+    Auto,
     Tmuxw,
     Tmuxp,
     Vscode,
@@ -188,10 +193,44 @@ fn detect_debugger(debuggee: &str) -> Result<Box<dyn Debugger>> {
 
 fn build_debugger_terminal(action: &DebuggerTerminalOpt) -> Box<dyn DebuggerTerminal> {
     match action {
+        DebuggerTerminalOpt::Auto => build_debugger_terminal(&detect_debugger_terminal()),
         DebuggerTerminalOpt::Tmuxw => Box::new(Tmux::new(TmuxLayout::NewWindow)),
         DebuggerTerminalOpt::Tmuxp => Box::new(Tmux::new(TmuxLayout::NewPane)),
         DebuggerTerminalOpt::Vscode => Box::new(VsCode::new()),
     }
+}
+
+fn detect_debugger_terminal() -> DebuggerTerminalOpt {
+    match is_in_vscode_term() {
+        true => DebuggerTerminalOpt::Vscode,
+        false => DebuggerTerminalOpt::Tmuxw,
+    }
+}
+
+fn is_in_vscode_term() -> bool {
+    let inner = || -> Result<bool> {
+        let process_info = sysinfo::RefreshKind::new();
+        process_info.with_processes();
+        let mut sysinfo_system = sysinfo::System::new_with_specifics(process_info);
+        sysinfo_system.refresh_processes();
+        let processes = sysinfo_system.get_processes();
+
+        let cur_pid = sysinfo::get_current_pid().map_err(|e| anyhow!(e))?;
+        let mut cur_proc_opt = processes.get(&cur_pid);
+        while let Some(cur_proc) = cur_proc_opt {
+            if cur_proc.name() == "node" && cur_proc.cmd().iter().any(|arg| arg.contains("vscode"))
+            {
+                return Ok(true);
+            }
+            if let Some(parent_pid) = cur_proc.parent() {
+                cur_proc_opt = processes.get(&parent_pid);
+            } else {
+                break;
+            }
+        }
+        Ok(false)
+    };
+    inner().unwrap_or(false)
 }
 
 fn wait_until_exit(pid: Pid) -> Result<i32> {
