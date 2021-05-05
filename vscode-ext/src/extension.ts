@@ -61,25 +61,8 @@ class DbgeeConnector {
 
 	async refreshAttachInformation() {
 		const fifoPath = "/tmp/dbgee-vscode-debuggees";
-		let connectionPath;
-		while (true) {
-			connectionPath = new TextDecoder("utf-8").decode(await this.fs.readFile(vscode.Uri.file(fifoPath)));
-			if (this.isConnectionAlive(connectionPath)) {
-				break;
-			}
-		}
-		this.attachInformation = JSON.parse(new TextDecoder("utf-8").decode(await this.fs.readFile(vscode.Uri.file(connectionPath)))) as DbgeeAttachInformation;
+		this.attachInformation = JSON.parse(new TextDecoder("utf-8").decode(await this.fs.readFile(vscode.Uri.file(fifoPath)))) as DbgeeAttachInformation;
 		this.retrievedProperties = new Set<String>();
-	}
-
-	async isConnectionAlive(connectionPath: string): Promise<boolean> {
-		try {
-			await this.fs.stat(vscode.Uri.file(connectionPath));
-			// suceeding means this file exists
-			return true;
-		} catch {
-			return false;
-		}
 	}
 }
 

@@ -1,9 +1,8 @@
-use std::{fs::File, io::Write, process::Command};
-
 use crate::debugger::Debugger;
-use anyhow::{anyhow, Context, Result};
+
+use anyhow::{Context, Result};
 use nix::unistd;
-use tempfile::NamedTempFile;
+use std::{fs::File, io::Write, process::Command};
 
 pub trait DebuggerTerminal {
     fn open(&mut self, debugger: &dyn Debugger) -> Result<()>;
@@ -65,22 +64,19 @@ impl DebuggerTerminal for Tmux {
 }
 
 pub struct VsCode {
-    attach_information_file: Option<NamedTempFile>,
-    fifo_path_for_attach_information_flie: String,
+    fifo_path: String,
 }
 
 impl VsCode {
     pub fn new() -> VsCode {
         VsCode {
-            attach_information_file: None,
-            fifo_path_for_attach_information_flie: "/tmp/dbgee-vscode-debuggees".to_owned(),
+            fifo_path: "/tmp/dbgee-vscode-debuggees".to_owned(),
         }
     }
 }
 
 impl DebuggerTerminal for VsCode {
     fn open(&mut self, debugger: &dyn Debugger) -> Result<()> {
-        let mut attach_information_file = NamedTempFile::new()?;
         let json = format!(
             "{{{}}}",
             debugger
@@ -90,29 +86,17 @@ impl DebuggerTerminal for VsCode {
                 .collect::<Vec<String>>()
                 .join(", ")
         );
-        attach_information_file.write_all(json.as_bytes())?;
 
-        let attach_information_file_path = attach_information_file
-            .path()
-            .to_str()
-            .ok_or_else(|| anyhow!("Temporary Directory is in a non-UTF8 path"))?
-            .to_owned();
-        match unistd::mkfifo(
-            self.fifo_path_for_attach_information_flie.as_str(),
-            nix::sys::stat::Mode::S_IRWXU,
-        ) {
+        let fifo_path = self.fifo_path.clone();
+        match unistd::mkfifo(fifo_path.as_str(), nix::sys::stat::Mode::S_IRWXU) {
             Err(nix::Error::Sys(nix::errno::Errno::EEXIST)) => Ok(()),
             other => other,
         }?;
-        let fifo_path_for_attach_information_flie =
-            self.fifo_path_for_attach_information_flie.clone();
         std::thread::spawn(move || {
-            if let Ok(mut fifo) = File::create(fifo_path_for_attach_information_flie.as_str()) {
-                let _ = fifo.write(&attach_information_file_path.as_bytes());
+            if let Ok(mut fifo) = File::create(&fifo_path) {
+                let _ = fifo.write_all(&json.as_bytes());
             }
         });
-
-        self.attach_information_file = Some(attach_information_file);
 
         log::info!("The debuggee process is paused. Attach to it in VSCode");
 

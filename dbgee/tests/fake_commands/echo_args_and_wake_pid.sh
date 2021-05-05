@@ -8,6 +8,7 @@ for arg in "$@"; do
   if [ "$arg" = -p ]; then
     is_pid=1
   elif [ "$is_pid" = 1 ]; then
+    is_pid=0
     pid="$arg"
 
     # the command sleeping may need multiple SIGCONT

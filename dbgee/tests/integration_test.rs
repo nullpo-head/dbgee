@@ -1,26 +1,31 @@
-use std::{env, fs, path::PathBuf, process::Command, str::FromStr};
+use std::{
+    env, fs,
+    io::Read,
+    os::unix::process::CommandExt,
+    path::PathBuf,
+    process::{Command, Stdio},
+    str::FromStr,
+};
 
 use anyhow::Result;
+use nix::{sys::signal, unistd};
 
 #[test]
 fn test_run_pid_debugger() -> Result<()> {
     set_fake_commands_path()?;
-    let dbgee_pathbuf = get_bin_path();
+    let dbgee_pathbuf = get_dbgee_bin_path();
     let langs = ["c", "rust"];
 
     for lang in langs.iter() {
+        let lang_bin_path = get_lang_testbin_path(lang)?;
         let cmd = vec![
-            "run".to_owned(),
-            "-t".to_owned(),
-            "tmuxw".to_owned(),
-            "--".to_owned(),
-            format!(
-                "{}/lang_projects/{}/hello",
-                get_tests_dir()?.to_str().unwrap(),
-                lang
-            ),
-            "arg0".to_owned(),
-            "arg1".to_owned(),
+            "run",
+            "-t",
+            "tmuxw",
+            "--",
+            lang_bin_path.as_str(),
+            "arg0",
+            "arg1",
         ];
         let output = Command::new(dbgee_pathbuf.as_os_str()).args(cmd).output()?;
         assert_eq!(Some(0), output.status.code());
@@ -36,20 +41,10 @@ fn test_run_pid_debugger() -> Result<()> {
 #[test]
 fn test_run_dlv() -> Result<()> {
     set_fake_commands_path()?;
-    let dbgee_pathbuf = get_bin_path();
+    let dbgee_pathbuf = get_dbgee_bin_path();
 
-    let cmd = vec![
-        "run".to_owned(),
-        "-t".to_owned(),
-        "tmuxw".to_owned(),
-        "--".to_owned(),
-        format!(
-            "{}/lang_projects/go/hello",
-            get_tests_dir()?.to_str().unwrap()
-        ),
-        "arg0".to_owned(),
-        "arg1".to_owned(),
-    ];
+    let lang_testbin = get_lang_testbin_path("go")?;
+    let cmd = vec!["run", "-t", "tmuxw", "--", &lang_testbin, "arg0", "arg1"];
     let output = Command::new(dbgee_pathbuf.as_os_str()).args(cmd).output()?;
     assert_eq!(Some(0), output.status.code());
     let stdout = String::from_utf8(output.stdout)?
@@ -68,13 +63,10 @@ fn test_set_pid_debugger() -> Result<()> {
     set_fake_commands_path()?;
 
     // copy the hello binary to a temporary file for testing
-    let copied_hello = CopiedExecutable::new(&format!(
-        "{}/lang_projects/c/hello",
-        get_tests_dir()?.to_str().unwrap()
-    ))?;
+    let copied_hello = CopiedExecutable::new(&get_lang_testbin_path("c")?)?;
 
     // `set` should succeed
-    let dbgee_pathbuf = get_bin_path();
+    let dbgee_pathbuf = get_dbgee_bin_path();
     let cmd_to_set = vec!["set", "-t", "tmuxw", &copied_hello.path];
     let status = Command::new(dbgee_pathbuf.as_os_str())
         .args(cmd_to_set)
@@ -111,13 +103,10 @@ fn test_set_pid_debugger() -> Result<()> {
 fn test_run_debuggee_which_is_set_before() -> Result<()> {
     set_fake_commands_path()?;
 
-    let copied_hello = CopiedExecutable::new(&format!(
-        "{}/lang_projects/c/hello",
-        get_tests_dir()?.to_str().unwrap()
-    ))?;
+    let copied_hello = CopiedExecutable::new(&get_lang_testbin_path("c")?)?;
 
     // `set` the debuggee first
-    let dbgee_pathbuf = get_bin_path();
+    let dbgee_pathbuf = get_dbgee_bin_path();
     let cmd_to_set = vec!["set", "-t", "tmuxw", &copied_hello.path];
     let status = Command::new(dbgee_pathbuf.as_os_str())
         .args(cmd_to_set)
@@ -156,6 +145,60 @@ fn test_run_debuggee_which_is_set_before() -> Result<()> {
     Ok(())
 }
 
+#[test]
+fn test_run_for_vscode() -> Result<()> {
+    set_fake_commands_path()?;
+    let dbgee_pathbuf = get_dbgee_bin_path();
+
+    // launch `dbgee`
+    let lang_testbin = get_lang_testbin_path("python")?;
+    let debuggee_args = vec!["run", "-t", "vscode", "--", &lang_testbin, "arg0", "arg1"];
+    let mut dbgee_command = Command::new(dbgee_pathbuf.as_os_str());
+    dbgee_command
+        .args(debuggee_args)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    unsafe {
+        // to kill dbgee including its child later.
+        dbgee_command.pre_exec(|| {
+            unistd::setpgid(unistd::Pid::from_raw(0), unistd::Pid::from_raw(0)).unwrap();
+            Ok(())
+        });
+    }
+    let dbgee = dbgee_command.spawn().unwrap();
+
+    // read from the fifo in a thread with timtout because it may block if there's a bug
+    let (sender, receiver) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let mut file = fs::File::open("/tmp/dbgee-vscode-debuggees").unwrap();
+        //let json = fs::read_to_string("/tmp/dbgee-vscode-debuggees").unwrap();
+        let mut json = String::new();
+        file.read_to_string(&mut json).unwrap();
+        let _ = sender.send(json);
+    });
+    let json = receiver
+        .recv_timeout(std::time::Duration::from_secs(10))
+        .unwrap();
+    // assert that it is a json
+    assert!(json.starts_with('{'));
+    assert!(json.ends_with('}'));
+    assert!(json.contains(r#"debuggerPort": "#));
+
+    // kill dbgee including its child.
+    signal::killpg(unistd::Pid::from_raw(dbgee.id() as i32), signal::SIGTERM).unwrap();
+    let mut debugpy_args = String::new();
+    let _ = dbgee.stdout.unwrap().read_to_string(&mut debugpy_args);
+    assert_eq!(
+        format!(
+            "'-m' 'debugpy' '--wait-for-client' '--listen' '<NUM>' '{}' 'arg0' 'arg1' \n",
+            &get_lang_testbin_path("python")?
+        ),
+        debugpy_args
+    );
+
+    Ok(())
+}
+
 fn set_fake_commands_path() -> Result<()> {
     let mut pathbuf = get_tests_dir()?;
     pathbuf.push("fake_commands:");
@@ -169,7 +212,7 @@ fn set_fake_commands_path() -> Result<()> {
     Ok(())
 }
 
-fn get_bin_path() -> PathBuf {
+fn get_dbgee_bin_path() -> PathBuf {
     let mut pathbuf = env::current_exe().unwrap();
     pathbuf.pop();
     // https://github.com/rust-lang/cargo/issues/5758
@@ -178,6 +221,14 @@ fn get_bin_path() -> PathBuf {
     }
     pathbuf.push("dbgee");
     pathbuf
+}
+
+fn get_lang_testbin_path(lang: &str) -> Result<String> {
+    Ok(format!(
+        "{}/lang_projects/{}/hello",
+        get_tests_dir()?.to_str().unwrap(),
+        lang
+    ))
 }
 
 fn get_tests_dir() -> Result<PathBuf> {
