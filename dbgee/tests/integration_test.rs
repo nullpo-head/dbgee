@@ -67,11 +67,13 @@ fn test_run_dlv() -> Result<()> {
 fn test_set_pid_debugger() -> Result<()> {
     set_fake_commands_path()?;
 
+    // copy the hello binary to a temporary file for testing
     let copied_hello = CopiedExecutable::new(&format!(
         "{}/lang_projects/c/hello",
         get_tests_dir()?.to_str().unwrap()
     ))?;
 
+    // `set` should succeed
     let dbgee_pathbuf = get_bin_path();
     let cmd_to_set = vec!["set", "-t", "tmuxw", &copied_hello.path];
     let status = Command::new(dbgee_pathbuf.as_os_str())
@@ -79,6 +81,7 @@ fn test_set_pid_debugger() -> Result<()> {
         .status()?;
     assert_eq!(Some(0), status.code());
 
+    // Running the copied hello binary now should trigger tmux
     let debuggee_output = Command::new(&copied_hello.path).output()?;
     assert_eq!(Some(0), debuggee_output.status.code());
     assert_eq!(
@@ -86,18 +89,69 @@ fn test_set_pid_debugger() -> Result<()> {
         &String::from_utf8(debuggee_output.stdout)?
     );
 
+    // `unset` should succeed
     let cmd_to_unset = vec!["unset", &copied_hello.path];
     let status = Command::new(dbgee_pathbuf.as_os_str())
         .args(cmd_to_unset)
         .status()?;
     assert_eq!(Some(0), status.code());
 
+    // Now the copied_hello should be restored
     let original_debuggee_output = Command::new(&copied_hello.path).output()?;
-    assert_eq!(Some(0), debuggee_output.status.code());
+    assert_eq!(Some(0), original_debuggee_output.status.code());
     assert_eq!(
         "hello\n",
         &String::from_utf8(original_debuggee_output.stdout)?
     );
+
+    Ok(())
+}
+
+#[test]
+fn test_run_debuggee_which_is_set_before() -> Result<()> {
+    set_fake_commands_path()?;
+
+    let copied_hello = CopiedExecutable::new(&format!(
+        "{}/lang_projects/c/hello",
+        get_tests_dir()?.to_str().unwrap()
+    ))?;
+
+    // `set` the debuggee first
+    let dbgee_pathbuf = get_bin_path();
+    let cmd_to_set = vec!["set", "-t", "tmuxw", &copied_hello.path];
+    let status = Command::new(dbgee_pathbuf.as_os_str())
+        .args(cmd_to_set)
+        .status()?;
+    assert_eq!(Some(0), status.code());
+
+    // dbgee should be able to `run` the debuggee which is being `set`
+    let cmd = vec![
+        "run",
+        "-t",
+        "tmuxw",
+        "--",
+        &copied_hello.path,
+        "arg0",
+        "arg1",
+    ];
+    let output = Command::new(dbgee_pathbuf.as_os_str()).args(cmd).output()?;
+    assert_eq!(Some(0), output.status.code());
+    assert_eq!(
+        "'new-window' 'gdb' '-p' '<NUM>' \nhello\n",
+        &String::from_utf8(output.stdout)?
+    );
+
+    // `unset` should succeed
+    let cmd_to_unset = vec!["unset", &copied_hello.path];
+    let status = Command::new(dbgee_pathbuf.as_os_str())
+        .args(cmd_to_unset)
+        .status()?;
+    assert_eq!(Some(0), status.code());
+
+    // Now the copied_hello should be restored
+    let output = Command::new(&copied_hello.path).output()?;
+    assert_eq!(Some(0), output.status.code());
+    assert_eq!("hello\n", &String::from_utf8(output.stdout)?);
 
     Ok(())
 }
@@ -138,11 +192,9 @@ struct CopiedExecutable {
 
 impl CopiedExecutable {
     fn new(path: &str) -> Result<CopiedExecutable> {
-        let copied_path = "/tmp/dbgee-copied-debuggee";
-        fs::copy(&path, copied_path)?;
-        Ok(CopiedExecutable {
-            path: copied_path.to_string(),
-        })
+        let copied_path = format!("/tmp/dbgee-copied-debuggee-{}", uuid::Uuid::new_v4());
+        fs::copy(&path, &copied_path)?;
+        Ok(CopiedExecutable { path: copied_path })
     }
 }
 

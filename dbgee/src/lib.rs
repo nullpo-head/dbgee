@@ -4,6 +4,7 @@ mod file_helper;
 
 use debugger::Debugger;
 use debugger_terminal::{DebuggerTerminal, Tmux, TmuxLayout, VsCode};
+use file_helper::is_executable;
 
 use std::str;
 
@@ -132,6 +133,13 @@ pub fn run(opts: Opts) -> Result<i32> {
         Subcommand::Unset(ref unset_opts) => &unset_opts.debuggee,
     };
     let mut debugger = build_debugger(&opts.debugger, debuggee)?;
+
+    if !is_executable(debuggee) {
+        bail!(
+            "the debugee (path: '{}') is not an executable file.",
+            debuggee
+        );
+    }
 
     match opts.command {
         Subcommand::Run(run_opts) => {

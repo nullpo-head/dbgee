@@ -104,8 +104,11 @@ impl GdbCompatibleDebugger {
 
 impl Debugger for GdbCompatibleDebugger {
     fn run(&mut self, run_opts: &RunOpts, terminal: &mut dyn DebuggerTerminal) -> Result<Pid> {
-        let debuggee_abspath = get_valid_executable_path(&run_opts.debuggee, "debuggee")?;
-        let debuggee_pid = run_and_stop_dbgee(run_opts)?;
+        let debuggee_abspath = get_path_of_unset_debuggee(&run_opts.debuggee);
+        let debuggee_pid = run_and_stop_dbgee(
+            &debuggee_abspath,
+            run_opts.debuggee_args.iter().map(String::as_str),
+        )?;
         self.debuggee_pid = Some(debuggee_pid);
         self.debuggee_path = Some(debuggee_abspath);
         terminal.open(self)?;
@@ -187,6 +190,7 @@ impl DelveDebugger {
 
 impl Debugger for DelveDebugger {
     fn run(&mut self, run_opts: &RunOpts, terminal: &mut dyn DebuggerTerminal) -> Result<Pid> {
+        let debuggee_abspath = get_path_of_unset_debuggee(&run_opts.debuggee);
         self.port = Some(5679);
         let debugger_args: Vec<&str> = vec![
             "exec",
@@ -196,7 +200,7 @@ impl Debugger for DelveDebugger {
             "--api-version=2",
             "--listen",
             "localhost:5679",
-            &run_opts.debuggee,
+            &debuggee_abspath,
             "--",
         ]
         .into_iter()
@@ -265,7 +269,11 @@ impl StopAndWritePidDebugger {
 
 impl Debugger for StopAndWritePidDebugger {
     fn run(&mut self, run_opts: &RunOpts, _terminal: &mut dyn DebuggerTerminal) -> Result<Pid> {
-        let debuggee_pid = run_and_stop_dbgee(run_opts)?;
+        let debuggee_abspath = get_path_of_unset_debuggee(&run_opts.debuggee);
+        let debuggee_pid = run_and_stop_dbgee(
+            &debuggee_abspath,
+            run_opts.debuggee_args.iter().map(String::as_str),
+        )?;
         log::info!("The debuggee process is paused. Atach a debugger to it by PID.");
         log::info!(
             "PID: {}. It's also written to /tmp/dbgee_pid as a plain text number.",
@@ -409,11 +417,8 @@ fn launch_debugger_server(debugger_path: &str, debugger_args: &[&str]) -> Result
     Ok(Pid::from_raw(debugger.id() as i32))
 }
 
-fn run_and_stop_dbgee(run_opts: &RunOpts) -> Result<Pid> {
-    let debuggee_cmd: Vec<&String> = vec![&run_opts.debuggee]
-        .into_iter()
-        .chain(run_opts.debuggee_args.iter())
-        .collect();
+fn run_and_stop_dbgee<'a>(debuggee: &'a str, args: impl Iterator<Item = &'a str>) -> Result<Pid> {
+    let debuggee_cmd: Vec<&str> = vec![debuggee].into_iter().chain(args).collect();
     // To wait for the child process, not being signalled by Ctrl+C
     ignore_sigint()?;
     let debuggee_pid = fork_exec_stop(&debuggee_cmd)?;
@@ -441,6 +446,14 @@ fn set_to_exec_dgeee(set_opts: &SetOpts, _terminal: &mut dyn DebuggerTerminal) -
 
 fn unset_from_exec_dbgee(unset_opts: &UnsetOpts) -> Result<()> {
     unwrap_debuggee_binary(&unset_opts.debuggee)
+}
+
+fn get_path_of_unset_debuggee(debuggee: &str) -> String {
+    if check_if_wrapped(&debuggee) {
+        get_debuggee_backup_name(&debuggee)
+    } else {
+        debuggee.to_owned()
+    }
 }
 
 fn wrap_debuggee_binary(debuggee: &str, run_command: &str) -> Result<()> {
