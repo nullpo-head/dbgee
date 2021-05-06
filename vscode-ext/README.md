@@ -34,11 +34,11 @@ You can also check the usage of `dbgee` command there.
 
 ## Supported platforms
 
-**Platforms**
+### Platforms
 
 Currently only Linux (including WSL2 on Windows) is supported. However, adding macOS support is pretty easy and will be added soon if there are any macOS users. Please say hi to me in a GitHub issue.
 
-**Languages**
+### Languages
 
 The current supported languages are C, C++, Rust, Go, Python and any languages which Gdb, LLDB, or CodeLLDB support.
 
