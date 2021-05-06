@@ -30,7 +30,7 @@ fn test_run_pid_debugger() -> Result<()> {
         let output = Command::new(dbgee_pathbuf.as_os_str()).args(cmd).output()?;
         assert_eq!(Some(0), output.status.code());
         assert_eq!(
-            "'new-window' 'gdb' '-p' '<NUM>' \nhello\n",
+            "'new-window' 'gdb' '-tui' '-p' '<NUM>' \nhello\n",
             &String::from_utf8(output.stdout)?
         );
     }
@@ -77,7 +77,7 @@ fn test_set_pid_debugger() -> Result<()> {
     let debuggee_output = Command::new(&copied_hello.path).output()?;
     assert_eq!(Some(0), debuggee_output.status.code());
     assert_eq!(
-        "'new-window' 'gdb' '-p' '<NUM>' \nhello\n",
+        "'new-window' 'gdb' '-tui' '-p' '<NUM>' \nhello\n",
         &String::from_utf8(debuggee_output.stdout)?
     );
 
@@ -126,7 +126,7 @@ fn test_run_debuggee_which_is_set_before() -> Result<()> {
     let output = Command::new(dbgee_pathbuf.as_os_str()).args(cmd).output()?;
     assert_eq!(Some(0), output.status.code());
     assert_eq!(
-        "'new-window' 'gdb' '-p' '<NUM>' \nhello\n",
+        "'new-window' 'gdb' '-tui' '-p' '<NUM>' \nhello\n",
         &String::from_utf8(output.stdout)?
     );
 
