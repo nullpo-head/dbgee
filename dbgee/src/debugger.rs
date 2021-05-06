@@ -1,5 +1,7 @@
 use crate::{
-    file_helper::{command_exists, get_filetype_by_filecmd, get_valid_executable_path},
+    file_helper::{
+        command_exists, get_abspath, get_filetype_by_filecmd, get_valid_executable_path,
+    },
     DebuggerTerminal, RunOpts, SetOpts, UnsetOpts,
 };
 use crate::{Opts, SETOPTS_POSITIONAL_ARGS};
@@ -104,7 +106,7 @@ impl GdbCompatibleDebugger {
 
 impl Debugger for GdbCompatibleDebugger {
     fn run(&mut self, run_opts: &RunOpts, terminal: &mut dyn DebuggerTerminal) -> Result<Pid> {
-        let debuggee_abspath = get_path_of_unset_debuggee(&run_opts.debuggee);
+        let debuggee_abspath = get_path_of_unset_debuggee(&run_opts.debuggee)?;
         let debuggee_pid = run_and_stop_dbgee(
             &debuggee_abspath,
             run_opts.debuggee_args.iter().map(String::as_str),
@@ -190,7 +192,7 @@ impl DelveDebugger {
 
 impl Debugger for DelveDebugger {
     fn run(&mut self, run_opts: &RunOpts, terminal: &mut dyn DebuggerTerminal) -> Result<Pid> {
-        let debuggee_abspath = get_path_of_unset_debuggee(&run_opts.debuggee);
+        let debuggee_abspath = get_path_of_unset_debuggee(&run_opts.debuggee)?;
         self.port = Some(5679);
         let debugger_args: Vec<&str> = vec![
             "exec",
@@ -269,7 +271,7 @@ impl StopAndWritePidDebugger {
 
 impl Debugger for StopAndWritePidDebugger {
     fn run(&mut self, run_opts: &RunOpts, _terminal: &mut dyn DebuggerTerminal) -> Result<Pid> {
-        let debuggee_abspath = get_path_of_unset_debuggee(&run_opts.debuggee);
+        let debuggee_abspath = get_path_of_unset_debuggee(&run_opts.debuggee)?;
         let debuggee_pid = run_and_stop_dbgee(
             &debuggee_abspath,
             run_opts.debuggee_args.iter().map(String::as_str),
@@ -448,12 +450,12 @@ fn unset_from_exec_dbgee(unset_opts: &UnsetOpts) -> Result<()> {
     unwrap_debuggee_binary(&unset_opts.debuggee)
 }
 
-fn get_path_of_unset_debuggee(debuggee: &str) -> String {
-    if check_if_wrapped(&debuggee) {
-        get_debuggee_backup_name(&debuggee)
-    } else {
-        debuggee.to_owned()
-    }
+fn get_path_of_unset_debuggee(debuggee: &str) -> Result<String> {
+    let abspath = get_abspath(debuggee, "debuggee")?;
+    Ok(match check_if_wrapped(&debuggee) {
+        true => get_debuggee_backup_name(&abspath),
+        false => abspath,
+    })
 }
 
 fn wrap_debuggee_binary(debuggee: &str, run_command: &str) -> Result<()> {
