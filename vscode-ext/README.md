@@ -28,9 +28,15 @@ You can also check the usage of `dbgee` command there.
 
 **Debugger extensions for languages**
 
-- CodeLLDB
+You need actual debugger extensions for each language to start debug sessions.
 
-  To debug lldb-based languages such as Rust, you need [CodeLLDB](https://marketplace.visualstudio.com/items?itemName=vadimcn.vscode-lldb) extension.
+- [CodeLLDB](https://marketplace.visualstudio.com/items?itemName=vadimcn.vscode-lldb)
+
+  To debug LLVM-based languages such as Rust
+
+- [Go](https://marketplace.visualstudio.com/items?itemName=golang.go)
+- [Python](https://marketplace.visualstudio.com/items?itemName=ms-python.python)
+- [C/C++](https://marketplace.visualstudio.com/items?itemName=ms-vscode.cpptools)
 
 ## Supported platforms
 

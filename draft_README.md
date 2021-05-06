@@ -1,3 +1,5 @@
+<img src="vscode-ext/images/icon.png" width="128px" height="128px">
+
 # Dbgee - the Zero-Configuration Debuggee for Debuggers
 
 Dbgee is a handy utility that allows the debugger to be actively started from the debuggee side.

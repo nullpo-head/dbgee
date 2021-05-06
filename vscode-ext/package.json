@@ -1,15 +1,22 @@
 {
     "name": "dbgee",
     "displayName": "vscode-dbgee",
-    "description": "",
-    "version": "0.0.1",
+    "description": "Dbgee - the zero-configuration debuggee for debuggers",
+    "version": "0.1.0",
     "publisher": "nullpo-head",
     "engines": {
         "vscode": "^1.55.0"
     },
+    "author": {
+        "name": "Takaya Saeki",
+        "url": "https://fuel.edby.coffee"
+    },
     "categories": [
+        "Debuggers",
         "Other"
     ],
+    "icon": "images/icon.png",
+    "preview": true,
     "activationEvents": [
         "onDebug",
         "onCommand:dbgee.getPid",
