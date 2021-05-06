@@ -1,3 +1,4 @@
+use colored::*;
 use dbgee::{run, Opts};
 use nix::unistd;
 use structopt::StructOpt;
@@ -29,12 +30,14 @@ fn init_logger() {
         if record.level() > log::Level::Error && is_first_info.fetch_and(false, Ordering::SeqCst) {
             writeln!(
                 buf,
-                "[Dbgee] Messages from dbgee are suppressed if the stderr is redirected or piped.",
+                "{} These dbgee's messages are suppressed if the stderr is redirected or piped.",
+                "[Dbgee]".bright_green()
             )?;
         }
         writeln!(
             buf,
-            "[Dbgee]{} {}",
+            "{}{} {}",
+            "[Dbgee]".bright_green(),
             if record.level() <= log::Level::Error {
                 format!(" {}:", record.level())
             } else {

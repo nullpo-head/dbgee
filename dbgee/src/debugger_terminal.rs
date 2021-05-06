@@ -5,6 +5,7 @@ use nix::unistd;
 use std::{fs::File, io::Write, process::Command};
 
 pub trait DebuggerTerminal {
+    fn name(&self) -> &str;
     fn open(&mut self, debugger: &dyn Debugger) -> Result<()>;
 }
 
@@ -33,6 +34,10 @@ impl TmuxLayout {
 }
 
 impl DebuggerTerminal for Tmux {
+    fn name(&self) -> &str {
+        "tmux"
+    }
+
     fn open(&mut self, debugger: &dyn Debugger) -> Result<()> {
         let debugger_cmd = debugger.build_attach_commandline()?;
         let is_tmux_active = Command::new("tmux")
@@ -76,6 +81,10 @@ impl VsCode {
 }
 
 impl DebuggerTerminal for VsCode {
+    fn name(&self) -> &str {
+        "vscode"
+    }
+
     fn open(&mut self, debugger: &dyn Debugger) -> Result<()> {
         let json = format!(
             "{{{}}}",

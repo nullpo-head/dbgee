@@ -53,6 +53,7 @@ impl GdbDebugger {
         let command_builder = |pid: Pid, _name: String| {
             Ok(vec![
                 "gdb".to_owned(),
+                "-tui".to_owned(),
                 "-p".to_owned(),
                 pid.as_raw().to_string(),
             ])
@@ -340,7 +341,7 @@ impl PythonDebugger {
 }
 
 impl Debugger for PythonDebugger {
-    fn run(&mut self, run_opts: &RunOpts, _terminal: &mut dyn DebuggerTerminal) -> Result<Pid> {
+    fn run(&mut self, run_opts: &RunOpts, terminal: &mut dyn DebuggerTerminal) -> Result<Pid> {
         self.port = Some(5679);
         let debugger_args: Vec<&str> = vec![
             "-m",
@@ -355,9 +356,11 @@ impl Debugger for PythonDebugger {
         .collect();
 
         let pid = launch_debugger_server(&self.python_command, &debugger_args)?;
-        log::info!("VSCode is the only supported debugger for Python.");
-        // Ignore the given _terminal since Python supports only Vscode
-        let mut vscode = Box::new(crate::debugger_terminal::VsCode::new());
+        if terminal.name() != "vscode" {
+            log::info!("only `-t vscode` is the supported option for Python.");
+        };
+        // Ignore the given terminal since Python supports only Vscode
+        let mut vscode = crate::debugger_terminal::VsCode::new();
         vscode.open(self)?;
 
         Ok(pid)

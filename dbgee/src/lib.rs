@@ -203,7 +203,7 @@ fn build_debugger_terminal(action: &DebuggerTerminalOpt) -> Box<dyn DebuggerTerm
 fn detect_debugger_terminal() -> DebuggerTerminalOpt {
     match is_in_vscode_term() {
         true => DebuggerTerminalOpt::Vscode,
-        false => DebuggerTerminalOpt::Tmuxw,
+        false => DebuggerTerminalOpt::Tmuxp,
     }
 }
 
