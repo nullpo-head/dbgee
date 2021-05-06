@@ -6,11 +6,17 @@ You don't have to bother with setting arguments, redirects, etc. in `launch.json
 
 ## Features
 
-**Launch your program in the integrated terminal, and start a debug session with zero configuration**
+### Launch your program in the integrated terminal, and start a debug session with zero configuration
 
-**Configure your program to wait for a debug session, no matter by what means it is started**
+![Launch your program in the integrated terminal, and start a debug session with zero configuration](./images/DbgeeRunInVsCode.gif)
 
-**Launch CUI debuggers in tmux**
+### Configure your program to wait for a debug session, no matter by what means it is started
+
+![Configure your program to wait for a debug session, no matter by what means it is started](./images/DbgeeSetInVsCode.gif)
+
+### Launch CUI debuggers in tmux
+
+![Launch CUI debuggers in tmux](./images/DbgeeRunSetInTmux.gif)
 
 ## Requirements
 

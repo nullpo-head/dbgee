@@ -9,11 +9,17 @@ In addition, Dbgee can also launch the CLI debugger in a tmux window or pane.
 
 The concept of Dbgee may be unfamiliar to you, so here are a few demos.
 
-**Debug your program with zero configuration in Visual Studio Code**
+### Debug your program with zero configuration in Visual Studio Code
 
-**Configure your program to launch a debugger when it runs**
+![Debug your program with zero configuration in Visual Studio Code](./vscode-ext/images/DbgeeRunInVsCode.gif)
 
-**Launch CUI debuggers in tmux**
+### Configure your program to launch a debugger when it runs
+
+![Configure your program to launch a debugger when it runs](./vscode-ext/images/DbgeeSetInVsCode.gif)
+
+### Launch CUI debuggers in tmux
+
+![Launch CUI debuggers in tmux](./vscode-ext/images/DbgeeRunSetInTmux.gif)
 
 ## Supported languages and platforms
 
