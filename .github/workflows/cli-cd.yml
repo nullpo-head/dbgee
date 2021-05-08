@@ -1,0 +1,52 @@
+name: Publish
+
+on:
+  push:
+    tags:
+      - "cli-v*"
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build:
+    name: Publish binaries
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        shell: bash
+        working-directory: ./dbgee
+
+    steps:
+      - uses: actions/checkout@v2
+      - uses: actions/cache@v2
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('dgbee/Cargo.lock') }}
+
+      - name: Build
+        run: cargo build --release
+
+      - name: Read the commit message and use it as a body of the new release
+        id: read_release
+        shell: bash
+        run: |
+          release="$(git log $(echo ${{ github.ref }} | grep -o 'cli-v.*') -1 --pretty=format:%B)"  # Use the commit message as the release message
+          echo "RELEASE_BODY<<EOF" >> $GITHUB_ENV
+          echo "$release" >> $GITHUB_ENV
+          echo "EOF" >> $GITHUB_ENV
+
+      - name: Upload Binaries to Release
+        uses: svenstaro/upload-release-action@v2
+        with:
+          repo_token: ${{ secrets.GITHUB_TOKEN }}
+          file: dbgee/target/release/dbgee
+          asset_name: dbgee-linux-x64
+          prerelease: true
+          tag: ${{ github.ref }}
+          overwrite: true
+          body: |
+            ${{ env.RELEASE_BODY }}
