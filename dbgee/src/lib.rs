@@ -25,16 +25,6 @@ use crate::debugger::{
 pub struct Opts {
     #[structopt(subcommand)]
     pub command: Subcommand,
-
-    /// Debugger to launch. Choose "auto", "gdb", "dlv", "stop-and-write-pid", "python"
-    /// or you can specify an arbitrary command line.
-    /// The debuggee's PID follows your command line as an argument.
-    ///
-    /// stop-and-write-pid: Stops the debuggee, and prints the debuggee's PID.
-    /// dbgee writes the PID to /tmp/dbgee_pid. If stderr is a tty,
-    /// dbgee outputs the PID to stderr as well.
-    #[structopt(short, long, default_value("auto"))]
-    pub debugger: String,
 }
 
 #[derive(Debug, StructOpt)]
@@ -95,14 +85,30 @@ pub struct UnsetOpts {
     /// Path to the debuggee process
     #[structopt(name = "debuggee")]
     pub debuggee: String,
+
+    /// Specify the debugger used for the previous 'set' command, which will be used for 'unset'.
+    /// Default is 'auto'. To explicitly specify it, choose one of 'gdb', 'lldb', 'dlv', 'stop-and-write-pid' and 'python'.
+    #[structopt(short, long, default_value("auto"))]
+    pub debugger: String,
 }
 
 #[derive(Debug, StructOpt)]
 pub struct AttachOpts {
+    /// Debugger to launch. Choose one of "auto", "gdb", "lldb", "dlv", "stop-and-write-pid" and "python".
+    ///
+    /// stop-and-write-pid: Stops the debuggee, and prints the debuggee's PID.
+    /// dbgee writes the PID to /tmp/dbgee_pid. If stderr is a tty,
+    /// dbgee outputs the PID to stderr as well.
+    ///
+    /// python: Use 'debugpy' module to debug Python in VSCode. Currently, 'python' ignores -t option and uses
+    /// only VSCode.
+    #[structopt(short, long, default_value("auto"))]
+    pub debugger: String,
+
     /// Terminal to launch the debugger in.
     ///
     /// auto (default): choose 'vscode' if dbgee is running in an integrated terminal,
-    /// choose 'tmuxw' otherwise.
+    /// choose 'tmuxp' otherwise.
     ///
     /// tmuxw: Opens a new tmux window in last active tmux session,
     /// launches a debugger there, and has the debugger attach to the debuggee.
@@ -132,12 +138,12 @@ pub enum DebuggerTerminalOpt {
 }
 
 pub fn run(opts: Opts) -> Result<i32> {
-    let debuggee = match opts.command {
-        Subcommand::Run(ref run_opts) => &run_opts.debuggee,
-        Subcommand::Set(ref set_opts) => &set_opts.debuggee,
-        Subcommand::Unset(ref unset_opts) => &unset_opts.debuggee,
+    let (debuggee, debugger_name) = match opts.command {
+        Subcommand::Run(ref run_opts) => (&run_opts.debuggee, &run_opts.attach_opts.debugger),
+        Subcommand::Set(ref set_opts) => (&set_opts.debuggee, &set_opts.attach_opts.debugger),
+        Subcommand::Unset(ref unset_opts) => (&unset_opts.debuggee, &unset_opts.debugger),
     };
-    let mut debugger = build_debugger(&opts.debugger, debuggee)?;
+    let mut debugger = build_debugger(debugger_name, debuggee)?;
 
     if !is_executable(debuggee) {
         bail!(

@@ -50,10 +50,10 @@ By the following command, the proper debugger for your program launches in a new
 dbgee run -- ./program arg0 arg1 arg2...
 ```
 
-You can manually specify your preferred debugger by the global `-d` option.
+You can manually specify your preferred debugger by the `-d` option.
 
 ```shell
-dbgee -d lldb run -- ./program arg0 arg1 arg2...
+dbgee run -d lldb -- ./program arg0 arg1 arg2...
 ```
 
 `dbgee` launches a debugger in a new tmux window unless you run `dbgee` in an integrated terminal in VSCode.
