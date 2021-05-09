@@ -1,6 +1,6 @@
 {
     "name": "dbgee",
-    "displayName": "vscode-dbgee",
+    "displayName": "Dbgee-vscode",
     "description": "Dbgee - the zero-configuration debuggee for debuggers",
     "version": "0.1.0",
     "publisher": "nullpo-head",
