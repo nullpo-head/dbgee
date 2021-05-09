@@ -8,15 +8,15 @@ You don't have to bother with setting arguments, redirects, etc. in `launch.json
 
 ### Launch your program in the integrated terminal, and start a debug session with zero configuration
 
-![Launch your program in the integrated terminal, and start a debug session with zero configuration](./images/DbgeeRunInVsCode.gif)
+![Launch your program in the integrated terminal, and start a debug session with zero configuration](vscode-ext/images/DbgeeRunInVsCode.gif)
 
 ### Configure your program to wait for a debug session, no matter by what means it is started
 
-![Configure your program to wait for a debug session, no matter by what means it is started](./images/DbgeeSetInVsCode.gif)
+![Configure your program to wait for a debug session, no matter by what means it is started](vscode-ext/images/DbgeeSetInVsCode.gif)
 
 ### Launch CUI debuggers in tmux
 
-![Launch CUI debuggers in tmux](./images/DbgeeRunSetInTmux.gif)
+![Launch CUI debuggers in tmux](vscode-ext/images/DbgeeRunSetInTmux.gif)
 
 ## Requirements
 
