@@ -15,7 +15,6 @@ jobs:
     defaults:
       run:
         shell: bash
-        working-directory: ./dbgee
 
     steps:
       - uses: actions/checkout@v2
@@ -24,11 +23,18 @@ jobs:
           path: |
             ~/.cargo/registry
             ~/.cargo/git
-            target
+            dbgee/target
           key: ${{ runner.os }}-cargo-${{ hashFiles('dgbee/Cargo.lock') }}
 
       - name: Build
-        run: cargo build --release
+        run: |
+          cd dbgee
+          cargo build --release
+
+      - name: Compress
+        run: |
+          cd dbgee/target/release
+          tar cvzf dbgee-linux-x64.tar.gz dbgee
 
       - name: Read the commit message and use it as a body of the new release
         id: read_release
@@ -43,8 +49,7 @@ jobs:
         uses: svenstaro/upload-release-action@v2
         with:
           repo_token: ${{ secrets.GITHUB_TOKEN }}
-          file: dbgee/target/release/dbgee
-          asset_name: dbgee-linux-x64
+          file: dbgee/target/release/dbgee-linux-x64.tar.gz
           prerelease: true
           tag: ${{ github.ref }}
           overwrite: true
