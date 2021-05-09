@@ -48,7 +48,7 @@ mv dbgee /usr/local/bin/ # Or anywhere in the PATH
 
 ### VSCode extension
 
-Please install "Dbgee" extension from the marketplace.
+Please install "Dbgee" extension from [the marketplace](https://marketplace.visualstudio.com/items?itemName=nullpo-head.dbgee).
 
 ## Usage
 
