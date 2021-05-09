@@ -4,7 +4,7 @@
     "description": "Dbgee - the zero-configuration debuggee for debuggers",
     "version": "0.1.0",
     "publisher": "nullpo-head",
-    "license": "See LICENSE in LICENSE.txt",
+    "license": "SEE LICENSE IN LICENSE.txt",
     "engines": {
         "vscode": "^1.55.0"
     },
