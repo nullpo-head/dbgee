@@ -50,7 +50,6 @@ jobs:
         with:
           repo_token: ${{ secrets.GITHUB_TOKEN }}
           file: dbgee/target/release/dbgee-linux-x64.tar.gz
-          prerelease: true
           tag: ${{ github.ref }}
           overwrite: true
           body: |
