@@ -1,11 +1,11 @@
-<img src="vscode-ext/images/icon.png" width="128px" height="128px">
-
 # Dbgee - the Zero-Configuration Debuggee for Debuggers
 
-Dbgee is a handy utility that allows the debugger to be actively started from the debuggee side.
-Just start your program by a simple command in a terminal, and the debugger will automatically attach to it with zero configuration.
+<img src="vscode-ext/images/icon.png" width="128px" height="128px">
+
+Dbgee is a handy utility that allows debuggers to be actively started from the debuggee side.
+Just start your program by a simple command in a terminal, and a debugger will automatically attach to it with zero configuration.
 You don't have to bother with setting arguments, redirects, etc. in `launch.json` in order to start the debugger.
-In addition, Dbgee can also launch the CLI debugger in a tmux window or pane.
+In addition, Dbgee can also launch CLI debuggers in a tmux window or pane.
 
 ## Demos
 
@@ -34,7 +34,21 @@ The current supported languages are C, C++, Rust, Go, Python and any languages w
 Currently only Linux (including WSL2 on Windows) is supported. However, adding macOS support is pretty easy and will be added soon if there are any macOS users.
 Please say hi to me in a GitHub issue.
 
-## Install
+## Installation
+
+There are two components, `dbgee` command and the optional VSCode extension.
+
+### `dbgee` command
+
+```shell
+curl -L -O https://github.com/nullpo-head/dbgee/releases/download/v0.1.0/dbgee-linux-x64.tar.gz
+tar xvf dbgee-linux-x64.tar.gz
+mv dbgee /usr/local/bin/ # Or anywhere in the PATH
+```
+
+### VSCode extension
+
+Please install "Dbgee" extension from the marketplace.
 
 ## Usage
 
@@ -60,14 +74,14 @@ dbgee run -d lldb -- ./program arg0 arg1 arg2...
 However, you can choose other options by specifying `-t` option. Please see the help for more information.
 
 ```shell
-dbgee run -t tmuxp -- ./program  arg0 arg1 arg2... # launch a debugger in a new tmux pane instead of a window
+dbgee run -t tmuxw -- ./program  arg0 arg1 arg2... # launch a debugger in a new tmux window instead of a window
 ```
 
 #### Debug your program in VSCode
 
 `dbgee` launches the given debuggee and wait for VSCode to connect to your program
 if `dbgee` is running in a VSCode's integrated terminal.
-Run the following command, and attach to your program in VSCode as the following video.
+Run the following command, and attach to your program in VSCode as the demo videos.
 
 ```shell
 dbgee run -- ./program arg0 arg1 arg2...
