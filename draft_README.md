@@ -13,15 +13,15 @@ The concept of Dbgee may be unfamiliar to you, so here are a few demos.
 
 ### Debug your program with zero configuration in Visual Studio Code
 
-![Debug your program with zero configuration in Visual Studio Code](./vscode-ext/images/DbgeeRunInVsCode.gif)
+<img alt="demo image" src="vscode-ext/images/DbgeeRunInVsCode.gif" width="850px">
 
 ### Configure your program to launch a debugger when it runs
 
-![Configure your program to launch a debugger when it runs](./vscode-ext/images/DbgeeSetInVsCode.gif)
+<img alt="demo image" src="vscode-ext/images/DbgeeSetInVsCode.gif" width="850px">
 
 ### Launch CUI debuggers in tmux
 
-![Launch CUI debuggers in tmux](./vscode-ext/images/DbgeeRunSetInTmux.gif)
+<img alt="demo image" src="vscode-ext/images/DbgeeRunSetInTmux.gif" width="850px">
 
 ## Supported languages and platforms
 
