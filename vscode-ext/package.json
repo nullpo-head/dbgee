@@ -17,6 +17,10 @@
     ],
     "icon": "images/icon.png",
     "preview": true,
+    "repository": {
+        "type": "git",
+        "url": "https://github.com/nullpo-head/dbgee.git"
+    },
     "activationEvents": [
         "onDebug",
         "onCommand:dbgee.getPid",

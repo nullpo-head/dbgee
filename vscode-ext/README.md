@@ -1,22 +1,27 @@
 # Dbgee - the Zero-Configuration Debuggee for Debuggers
 
-Dbgee is a handy utility that allows the debugger to be actively started from the debuggee side.
-Just start your program by a simple command in the integrated terminal, and you can start a debug session with zero configuration.
-You don't have to bother with setting arguments, redirects, etc. in `launch.json` in order to start the debugger.
+With Dbgee, you can start a debug session without writing any `launch.json` by 
+just launching your program in the integrated terminal.
+Also, Dbgee's ability to pre-set a debug session to start allows you to
+start debugging no matter how your program is launched.
+
+Dbgee frees you from the hassle of writing `launch.json`.
+It's also very useful especially when your program requires command line arguments or redirection,
+or when your program is launched by some script.
 
 ## Features
 
 ### Launch your program in the integrated terminal, and start a debug session with zero configuration
 
-![Launch your program in the integrated terminal, and start a debug session with zero configuration](vscode-ext/images/DbgeeRunInVsCode.gif)
+<img alt="demo image" src="vscode-ext/images/DbgeeRunInVsCode.gif" width="850px">
 
 ### Configure your program to wait for a debug session, no matter by what means it is started
 
-![Configure your program to wait for a debug session, no matter by what means it is started](vscode-ext/images/DbgeeSetInVsCode.gif)
+<img alt="demo image" src="vscode-ext/images/DbgeeSetInVsCode.gif" width="850px">
 
 ### Launch CUI debuggers in tmux
 
-![Launch CUI debuggers in tmux](vscode-ext/images/DbgeeRunSetInTmux.gif)
+<img alt="demo image" src="vscode-ext/images/DbgeeRunSetInTmux.gif" width="850px">
 
 ## Requirements
 
