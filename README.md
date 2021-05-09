@@ -2,14 +2,16 @@
 
 <img src="vscode-ext/images/icon.png" width="128px" height="128px">
 
-Dbgee is a handy utility that allows debuggers to be actively started from the debuggee side.
-Just start your program by a simple command in a terminal, and a debugger will automatically attach to it with zero configuration.
-You don't have to bother with setting arguments, redirects, etc. in `launch.json` in order to start the debugger.
-In addition, Dbgee can also launch CLI debuggers in a tmux window or pane.
+Dbgee is a handy utility that allows you to launch CLI debuggers and VSCode debuggers from the debuggee side.
+Just start your program by a simple command in a terminal, and the debugger will automatically attach to it with zero configuration.
+Dbgee also has the ability to preconfigure your program to automatically start a debug session no matter how the program is started.
+
+Dbgee is very useful especially when your program requires command line arguments or redirection, or when your program is launched by some script.
+In addition, Dbgee frees you from the hassle of writing `launch.json` for VSCode.
 
 ## Demos
 
-The concept of Dbgee may be unfamiliar to you, so here are a few demos.
+The concept of Dbgee should be new and unfamiliar to you, so here are some demos to get you started.
 
 ### Debug your program with zero configuration in Visual Studio Code
 
@@ -41,7 +43,7 @@ There are two components, `dbgee` command and the optional VSCode extension.
 ### `dbgee` command
 
 ```shell
-curl -L -O https://github.com/nullpo-head/dbgee/releases/download/v0.1.0/dbgee-linux-x64.tar.gz
+curl -L -O https://github.com/nullpo-head/dbgee/releases/download/cli-v0.1.0/dbgee-linux-x64.tar.gz
 tar xvf dbgee-linux-x64.tar.gz
 mv dbgee /usr/local/bin/ # Or anywhere in the PATH
 ```

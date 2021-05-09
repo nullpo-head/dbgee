@@ -19,9 +19,17 @@ use crate::debugger::{
     DelveDebugger, GdbDebugger, LldbDebugger, PythonDebugger, StopAndWritePidDebugger,
 };
 
-/// Launches the given command and attaches a debugger to it.
 #[derive(Debug, StructOpt)]
-#[structopt(name = "dbgee", about = "the active debuggee")]
+/// The zero-configuration debuggee for debuggers.
+/// 
+/// Dbgee is a handy utility that allows you to launch CLI debuggers and VSCode debuggers from the debuggee side.
+/// Just start your program by a simple command in a terminal, and the debugger will automatically attach to it with zero configuration.
+/// Dbgee also has the ability to preconfigure your program to automatically start a debug session no matter how the program is started.
+/// 
+/// Dbgee is very useful especially when your program requires command line arguments or redirection, or when your program is launched by some script.
+/// In addition, Dbgee frees you from the hassle of writing `launch.json` for VSCode.
+///  
+#[structopt(name = "dbgee")]
 pub struct Opts {
     #[structopt(subcommand)]
     pub command: Subcommand,
