@@ -29,10 +29,20 @@ fn test_run_pid_debugger() -> Result<()> {
         ];
         let output = Command::new(dbgee_pathbuf.as_os_str()).args(cmd).output()?;
         assert_eq!(Some(0), output.status.code());
-        assert_eq!(
-            "'new-window' 'gdb' '-tui' '-p' '<NUM>' \nhello\n",
-            &String::from_utf8(output.stdout)?
-        );
+        if cfg!(target_os = "linux") {
+            assert_eq!(
+                "'new-window' 'gdb' '-tui' '-p' '<NUM>' \nhello\n",
+                &String::from_utf8(output.stdout)?
+            );
+        } else
+        /* macOS */
+        {
+            // commands are wrapped by sudo in macOS
+            assert_eq!(
+                "'-u' '<USER>' 'tmux' 'new-window' 'sudo' 'gdb' '-tui' '-p' '<NUM>' \nhello\n",
+                &String::from_utf8(output.stdout)?
+            );
+        }
     }
 
     Ok(())
@@ -53,7 +63,14 @@ fn test_run_dlv() -> Result<()> {
         .collect::<Vec<String>>();
     // The command line for Delve is long, so test only part of it here
     assert!(stdout[0].starts_with("'exec' '--headless'"));
-    assert!(stdout[1].starts_with("'new-window' 'dlv' 'connect'"));
+    if cfg!(target_os = "linux") {
+        assert!(stdout[1].starts_with("'new-window' 'dlv' 'connect'"));
+    } else
+    /* macOS */
+    {
+        // commands are wrapped by sudo in macOS
+        assert!(stdout[1].starts_with("'-u' '<USER>' 'tmux' 'new-window' 'dlv' 'connect'"));
+    }
 
     Ok(())
 }
@@ -76,10 +93,20 @@ fn test_set_pid_debugger() -> Result<()> {
     // Running the copied hello binary now should trigger tmux
     let debuggee_output = Command::new(&copied_hello.path).output()?;
     assert_eq!(Some(0), debuggee_output.status.code());
-    assert_eq!(
-        "'new-window' 'gdb' '-tui' '-p' '<NUM>' \nhello\n",
-        &String::from_utf8(debuggee_output.stdout)?
-    );
+    if cfg!(target_os = "linux") {
+        assert_eq!(
+            "'new-window' 'gdb' '-tui' '-p' '<NUM>' \nhello\n",
+            &String::from_utf8(debuggee_output.stdout)?
+        );
+    } else
+    /* macOS */
+    {
+        // commands are wrapped by sudo in macOS
+        assert_eq!(
+            "'-u' '<USER>' 'tmux' 'new-window' 'sudo' 'gdb' '-tui' '-p' '<NUM>' \nhello\n",
+            &String::from_utf8(debuggee_output.stdout)?
+        );
+    }
 
     // `unset` should succeed
     let cmd_to_unset = vec!["unset", &copied_hello.path];
@@ -125,10 +152,20 @@ fn test_run_debuggee_which_is_set_before() -> Result<()> {
     ];
     let output = Command::new(dbgee_pathbuf.as_os_str()).args(cmd).output()?;
     assert_eq!(Some(0), output.status.code());
-    assert_eq!(
-        "'new-window' 'gdb' '-tui' '-p' '<NUM>' \nhello\n",
-        &String::from_utf8(output.stdout)?
-    );
+    if cfg!(target_os = "linux") {
+        assert_eq!(
+            "'new-window' 'gdb' '-tui' '-p' '<NUM>' \nhello\n",
+            &String::from_utf8(output.stdout)?
+        );
+    } else
+    /* macOS */
+    {
+        // commands are wrapped by sudo in macOS
+        assert_eq!(
+            "'-u' '<USER>' 'tmux' 'new-window' 'sudo' 'gdb' '-tui' '-p' '<NUM>' \nhello\n",
+            &String::from_utf8(output.stdout)?
+        );
+    }
 
     // `unset` should succeed
     let cmd_to_unset = vec!["unset", &copied_hello.path];
@@ -227,9 +264,11 @@ fn get_dbgee_bin_path() -> PathBuf {
 
 fn get_lang_testbin_path(lang: &str) -> Result<String> {
     Ok(format!(
-        "{}/lang_projects/{}/hello",
+        "{}/lang_projects/{}/hello-{}-{}",
         get_tests_dir()?.to_str().unwrap(),
-        lang
+        lang,
+        std::env::consts::ARCH,
+        std::env::consts::OS,
     ))
 }
 

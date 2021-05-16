@@ -39,26 +39,50 @@ impl DebuggerTerminal for Tmux {
     }
 
     fn open(&mut self, debugger: &dyn Debugger) -> Result<()> {
-        let debugger_cmd = debugger.build_attach_commandline()?;
-        let is_tmux_active = Command::new("tmux")
-            .args(&["ls"])
+        let sudo_user = std::env::var("SUDO_USER");
+        let tmux_command = match sudo_user {
+            Ok(ref sudo_user) => {
+                log::info!(
+                    "tmux is opened in a session of user '{}' instead of root's.",
+                    sudo_user
+                );
+                vec!["sudo", "-u", sudo_user.as_str(), "tmux"]
+            }
+            _ => vec!["tmux"],
+        };
+
+        let is_tmux_active = Command::new(&tmux_command[0])
+            .args(
+                tmux_command[1..tmux_command.len()]
+                    .iter()
+                    .chain(["ls"].iter()),
+            )
             .stderr(std::process::Stdio::null())
             .stdout(std::process::Stdio::null())
             .status()
             .with_context(|| "Failed to launch tmux. Is tmux installed?")?;
 
+        let debugger_cmd = debugger.build_attach_commandline()?;
         if is_tmux_active.success() {
             let mut args = self.layout.to_command();
             args.extend(debugger_cmd.iter().map(|s| s.as_str()));
-            Command::new("tmux")
-                .args(&args)
+            Command::new(&tmux_command[0])
+                .args(
+                    tmux_command[1..tmux_command.len()]
+                        .iter()
+                        .chain(args.iter()),
+                )
                 .status()
                 .with_context(|| "Failed to open a new tmux window for an unexpected reason.")?;
         } else {
             let mut args = vec!["new-session"];
             args.extend(debugger_cmd.iter().map(|s| s.as_str()));
-            Command::new("tmux")
-                .args(&args)
+            Command::new(&tmux_command[0])
+                .args(
+                    tmux_command[1..tmux_command.len()]
+                        .iter()
+                        .chain(args.iter()),
+                )
                 .spawn()
                 .with_context(|| "Failed to open a new tmux session for an unexpected reason.")?;
             log::info!("the debugger has launched in a new tmux session. Try `tmux a` to attach.",);

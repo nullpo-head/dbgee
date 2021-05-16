@@ -1,6 +1,6 @@
 use crate::{
     file_helper::{
-        command_exists, get_abspath, get_filetype_by_filecmd, get_valid_executable_path,
+        command_exists, get_abspath, get_cached_command_output, get_valid_executable_path,
     },
     DebuggerTerminal, RunOpts, SetOpts, UnsetOpts,
 };
@@ -22,6 +22,8 @@ use anyhow::{anyhow, bail, Context, Result};
 use nix::sys::{ptrace, signal, wait};
 use nix::unistd;
 use nix::unistd::Pid;
+use once_cell::sync::Lazy;
+use regex::Regex;
 use structopt::clap::ArgMatches;
 use structopt::StructOpt;
 use strum::{Display, EnumString};
@@ -51,12 +53,16 @@ pub struct GdbDebugger;
 impl GdbDebugger {
     pub fn build() -> Result<GdbCompatibleDebugger> {
         let command_builder = |pid: Pid, _name: String| {
-            Ok(vec![
+            let mut command = vec![
                 "gdb".to_owned(),
                 "-tui".to_owned(),
                 "-p".to_owned(),
                 pid.as_raw().to_string(),
-            ])
+            ];
+            if cfg!(target_os = "macos") {
+                command.insert(0, "sudo".to_string());
+            }
+            Ok(command)
         };
         GdbCompatibleDebugger::new("gdb", Box::new(command_builder))
     }
@@ -67,11 +73,11 @@ pub struct LldbDebugger;
 impl LldbDebugger {
     pub fn build() -> Result<GdbCompatibleDebugger> {
         let command_builder = |pid: Pid, _name: String| {
-            Ok(vec![
-                "lldb".to_owned(),
-                "-p".to_owned(),
-                pid.as_raw().to_string(),
-            ])
+            let mut command = vec!["lldb".to_owned(), "-p".to_owned(), pid.as_raw().to_string()];
+            if cfg!(target_os = "macos") {
+                command.insert(0, "sudo".to_string());
+            }
+            Ok(command)
         };
         GdbCompatibleDebugger::new("lldb", Box::new(command_builder))
     }
@@ -165,14 +171,12 @@ impl Debugger for GdbCompatibleDebugger {
     }
 
     fn is_debuggee_surely_supported(&self, debuggee: &str) -> Result<bool> {
-        let file_output = get_filetype_by_filecmd(debuggee)?;
-        if file_output.contains("ELF") {
+        let file_output = get_cached_command_output(&["file", debuggee])?;
+        if file_output.contains("ELF") || file_output.contains("Mach-O") {
             return Ok(true);
         }
         if file_output.contains("shell") && check_if_wrapped(debuggee) {
-            return Ok(
-                get_filetype_by_filecmd(&get_debuggee_backup_name(debuggee))?.contains("ELF"),
-            );
+            return self.is_debuggee_surely_supported(&get_debuggee_backup_name(debuggee));
         }
         Ok(false)
     }
@@ -249,14 +253,19 @@ impl Debugger for DelveDebugger {
     }
 
     fn is_debuggee_surely_supported(&self, debuggee: &str) -> Result<bool> {
-        let file_output = get_filetype_by_filecmd(debuggee)?;
+        let file_output = get_cached_command_output(&["file", debuggee])?;
+        // GNU's file command detects Go binaries
         if file_output.contains("Go ") {
             return Ok(true);
         }
+        static GO_VER_RE: Lazy<Regex> = Lazy::new(|| Regex::new(r"go(\d+\.?)+").unwrap());
+        if let Ok(true) = get_cached_command_output(&["go", "version", debuggee])
+            .map(|output| GO_VER_RE.is_match(&output))
+        {
+            return Ok(true);
+        }
         if file_output.contains("shell") && check_if_wrapped(debuggee) {
-            return Ok(
-                get_filetype_by_filecmd(&get_debuggee_backup_name(debuggee))?.contains("Go "),
-            );
+            return self.is_debuggee_surely_supported(&get_debuggee_backup_name(debuggee));
         }
         Ok(false)
     }
@@ -393,7 +402,7 @@ impl Debugger for PythonDebugger {
     }
 
     fn is_debuggee_surely_supported(&self, debuggee: &str) -> Result<bool> {
-        let file_output = get_filetype_by_filecmd(debuggee)?;
+        let file_output = get_cached_command_output(&["file", debuggee])?;
         if file_output.contains("Python") {
             return Ok(true);
         }
@@ -597,14 +606,14 @@ fn escape_single_quote(s: &str) -> String {
 
 fn fork_exec_stop<T: AsRef<str>>(debuggee_cmd: &[T]) -> Result<Pid> {
     get_valid_executable_path(debuggee_cmd[0].as_ref(), "the debuggee")?;
-    let (read_fd, write_fd) =
-        unistd::pipe2(nix::fcntl::OFlag::O_CLOEXEC).with_context(|| "pipe2 failed")?;
+    let (read_fd, write_fd) = unistd::pipe().with_context(|| "pipe failed")?;
     let mut sync_pipe_read: File = unsafe { File::from_raw_fd(read_fd) };
     let mut sync_pipe_write: File = unsafe { File::from_raw_fd(write_fd) };
     match unsafe { unistd::fork().with_context(|| "fork failed.")? } {
         unistd::ForkResult::Child => {
             let mut buf = [0; 1];
             let _ = sync_pipe_read.read(&mut buf);
+            drop(sync_pipe_read);
             let cargs: Vec<CString> = debuggee_cmd
                 .iter()
                 .map(|arg| CString::new(arg.as_ref()).unwrap())
@@ -655,7 +664,11 @@ fn fork_exec_stop<T: AsRef<str>>(debuggee_cmd: &[T]) -> Result<Pid> {
                 }
             }
 
-            ptrace::detach(debuggee_pid, signal::SIGSTOP)
+            // macOS's bug prevents you from delivering SIGSTOP by detach directly.
+            // Thus, send SIGSTOP by kill before detach
+            signal::kill(debuggee_pid, signal::SIGSTOP)
+                .with_context(|| "Unexpected error. Sending a signal failed")?;
+            ptrace::detach(debuggee_pid, None)
                 .with_context(|| "Unexpected error. Detach and stop failed")?;
 
             Ok(debuggee_pid)

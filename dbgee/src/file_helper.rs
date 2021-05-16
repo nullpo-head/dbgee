@@ -8,22 +8,25 @@ use std::{os::unix::fs::PermissionsExt, process::Command};
 use anyhow::{anyhow, bail, Context, Result};
 use once_cell::sync::Lazy;
 
-static FILE_CMD_OUTPUT_CACHE: Lazy<Mutex<HashMap<String, String>>> =
+static CMD_OUTPUT_CACHE: Lazy<Mutex<HashMap<String, String>>> =
     Lazy::new(|| Mutex::new(HashMap::new()));
 
-pub fn get_filetype_by_filecmd(path: &str) -> Result<String> {
-    let mut filecmd_cache = FILE_CMD_OUTPUT_CACHE
+pub fn get_cached_command_output(cmd: &[&str]) -> Result<String> {
+    let mut cmd_cache = CMD_OUTPUT_CACHE
         .lock()
-        .map_err(|_| anyhow!("Failed to acquire the lock for file command"))?;
+        .map_err(|_| anyhow!("Failed to acquire the lock for command output cache"))?;
 
-    if let Some(cached) = filecmd_cache.get(path) {
+    let cache_key = cmd.join(",");
+    if let Some(cached) = cmd_cache.get(&cache_key) {
         return Ok(cached.clone());
     }
 
-    let file_output = Command::new("file").args(&[path]).output()?;
-    let file_output = str::from_utf8(&file_output.stdout)?;
-    filecmd_cache.insert(path.to_owned(), file_output.to_owned());
-    Ok(file_output.to_owned())
+    let cmd_output = Command::new(&cmd[0])
+        .args(cmd[1..cmd.len()].iter())
+        .output()?;
+    let cmd_output = str::from_utf8(&cmd_output.stdout)?;
+    cmd_cache.insert(cache_key, cmd_output.to_owned());
+    Ok(cmd_output.to_owned())
 }
 
 pub fn command_exists(command: &str) -> bool {

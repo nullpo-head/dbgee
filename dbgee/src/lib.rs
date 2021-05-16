@@ -21,11 +21,11 @@ use crate::debugger::{
 
 #[derive(Debug, StructOpt)]
 /// The zero-configuration debuggee for debuggers.
-/// 
+///
 /// Dbgee is a handy utility that allows you to launch CLI debuggers and VSCode debuggers from the debuggee side.
 /// Just start your program by a simple command in a terminal, and the debugger will automatically attach to it with zero configuration.
 /// Dbgee also has the ability to preconfigure your program to automatically start a debug session no matter how the program is started.
-/// 
+///
 /// Dbgee is very useful especially when your program requires command line arguments or redirection, or when your program is launched by some script.
 /// In addition, Dbgee frees you from the hassle of writing `launch.json` for VSCode.
 ///  
@@ -248,14 +248,14 @@ fn is_in_vscode_term() -> bool {
 }
 
 fn wait_until_exit(pid: Pid) -> Result<i32> {
-    let exitcode_signalled = 130;
+    let exitcode_signaled = 130;
     loop {
         match wait::waitpid(pid, None) {
             Ok(wait::WaitStatus::Exited(_, exit_status)) => {
                 return Ok(exit_status);
             }
             Ok(wait::WaitStatus::Signaled(_, _, _)) => {
-                return Ok(exitcode_signalled);
+                return Ok(exitcode_signaled);
             }
             Err(nix::Error::Sys(nix::errno::Errno::ECHILD)) => {
                 return Ok(0);
