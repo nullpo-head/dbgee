@@ -31,18 +31,20 @@ jobs:
           key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
 
       - name: Get OS name
-        id: read_release
+        id: read_os_name
         shell: bash
         run: |
           echo "OS_RELEASE_NAME=$(uname | tr '[A-Z]' '[a-z]')" >> $GITHUB_ENV
+
+      - name: Run tests
+        run: |
+          cd dbgee
+          cargo test --verbose
 
       - name: Build
         run: |
           cd dbgee
           cargo build --release
-
-      - name: Run tests
-        run: cargo test --verbose
 
       - name: Compress
         run: |
