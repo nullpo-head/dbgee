@@ -210,6 +210,10 @@ impl Debugger for DelveDebugger {
         .chain(run_opts.debuggee_args.iter().map(|s| s.as_str()))
         .collect();
 
+        if cfg!(target_os = "macos") {
+            log::info!("delve outputs logs from lldb-server to stderr on macos, which cannot be suppressed");
+        }
+
         let pid = launch_debugger_server("dlv", &debugger_args)?;
         terminal.open(self)?;
 
