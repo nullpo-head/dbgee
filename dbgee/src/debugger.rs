@@ -606,14 +606,9 @@ fn escape_single_quote(s: &str) -> String {
 
 fn fork_exec_stop<T: AsRef<str>>(debuggee_cmd: &[T]) -> Result<Pid> {
     get_valid_executable_path(debuggee_cmd[0].as_ref(), "the debuggee")?;
-    let (read_fd, write_fd) = unistd::pipe().with_context(|| "pipe failed")?;
-    let mut sync_pipe_read: File = unsafe { File::from_raw_fd(read_fd) };
-    let mut sync_pipe_write: File = unsafe { File::from_raw_fd(write_fd) };
     match unsafe { unistd::fork().with_context(|| "fork failed.")? } {
         unistd::ForkResult::Child => {
-            let mut buf = [0; 1];
-            let _ = sync_pipe_read.read(&mut buf);
-            drop(sync_pipe_read);
+            ptrace::traceme().with_context(|| "ptrace::traceme failed.")?;
             let cargs: Vec<CString> = debuggee_cmd
                 .iter()
                 .map(|arg| CString::new(arg.as_ref()).unwrap())
@@ -628,37 +623,14 @@ fn fork_exec_stop<T: AsRef<str>>(debuggee_cmd: &[T]) -> Result<Pid> {
         unistd::ForkResult::Parent {
             child: debuggee_pid,
         } => {
-            ptrace::attach(debuggee_pid).with_context(|| {
-                let _ = signal::kill(debuggee_pid, signal::SIGKILL);
-                "ptrace attach failed. Perhaps dgbee is being traced by some debugger?"
-            })?;
-            let buf = [0; 1];
-            let _ = sync_pipe_write.write(&buf);
             // Wait for the debuggee to be stopped by SIGSTOP, which is triggered by PTRACE_ATTACH
-            match wait::waitpid(debuggee_pid, None)
-                .with_context(|| "Unexpected error. Waiting for SIGSTOP failed.")?
-            {
-                wait::WaitStatus::Stopped(_, signal::SIGSTOP) => {}
-                other => {
-                    eprintln!(
-                        "The observed signal is not SISTOP, but dbgee continues. {:?}",
-                        other
-                    );
-                }
-            }
-
-            ptrace::cont(debuggee_pid, None)
-                .with_context(|| "Unexpected error. Continuing the process failed")?;
             match wait::waitpid(debuggee_pid, None)
                 .with_context(|| "Unexpected error. Waiting for SIGTRAP failed.")?
             {
-                wait::WaitStatus::Exited(_, _) => {
-                    panic!("The process exited for an unexpected reason");
-                }
                 wait::WaitStatus::Stopped(_, signal::SIGTRAP) => {}
                 other => {
-                    eprintln!(
-                        "The observed signal is not SIGTRAP, but continues. {:?}",
+                    log::warn!(
+                        "The observed signal is not SIGTRAP, but dbgee continues. {:?}",
                         other
                     );
                 }
