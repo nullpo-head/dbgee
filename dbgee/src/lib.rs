@@ -232,7 +232,18 @@ fn is_in_vscode_term() -> bool {
         let cur_pid = sysinfo::get_current_pid().map_err(|e| anyhow!(e))?;
         let mut cur_proc_opt = processes.get(&cur_pid);
         while let Some(cur_proc) = cur_proc_opt {
+            // for remote development
             if cur_proc.name() == "node" && cur_proc.cmd().iter().any(|arg| arg.contains("vscode"))
+            {
+                return Ok(true);
+            }
+            // for at least macOS
+            if cur_proc.name() == "Electron"
+                && cur_proc
+                    .exe()
+                    .as_os_str()
+                    .to_string_lossy()
+                    .contains("Visual Studio Code")
             {
                 return Ok(true);
             }
