@@ -1,6 +1,7 @@
 use crate::{
     file_helper::{
-        command_exists, get_abspath, get_cached_command_output, get_valid_executable_path,
+        command_exists, get_abspath, get_cached_command_output, get_cached_file_output,
+        get_valid_executable_path,
     },
     DebuggerTerminal, RunOpts, SetOpts, UnsetOpts,
 };
@@ -167,7 +168,7 @@ impl Debugger for GdbCompatibleDebugger {
     }
 
     fn is_debuggee_surely_supported(&self, debuggee: &str) -> Result<bool> {
-        let file_output = get_cached_command_output(&["file", debuggee])?;
+        let file_output = get_cached_file_output(&debuggee)?;
         if file_output.contains("ELF") || file_output.contains("Mach-O") {
             return Ok(true);
         }
@@ -253,7 +254,7 @@ impl Debugger for DelveDebugger {
     }
 
     fn is_debuggee_surely_supported(&self, debuggee: &str) -> Result<bool> {
-        let file_output = get_cached_command_output(&["file", debuggee])?;
+        let file_output = get_cached_file_output(debuggee)?;
         // GNU's file command detects Go binaries
         if file_output.contains("Go ") {
             return Ok(true);
@@ -402,7 +403,7 @@ impl Debugger for PythonDebugger {
     }
 
     fn is_debuggee_surely_supported(&self, debuggee: &str) -> Result<bool> {
-        let file_output = get_cached_command_output(&["file", debuggee])?;
+        let file_output = get_cached_file_output(debuggee)?;
         if file_output.contains("Python") {
             return Ok(true);
         }

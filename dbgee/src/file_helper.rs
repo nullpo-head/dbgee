@@ -11,6 +11,11 @@ use once_cell::sync::Lazy;
 static CMD_OUTPUT_CACHE: Lazy<Mutex<HashMap<String, String>>> =
     Lazy::new(|| Mutex::new(HashMap::new()));
 
+pub fn get_cached_file_output(file: &str) -> Result<String> {
+    // -L to follow symbolic links
+    get_cached_command_output(&["file", "-L", file])
+}
+
 pub fn get_cached_command_output(cmd: &[&str]) -> Result<String> {
     let mut cmd_cache = CMD_OUTPUT_CACHE
         .lock()
