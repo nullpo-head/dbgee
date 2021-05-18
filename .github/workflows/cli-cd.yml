@@ -11,10 +11,14 @@ env:
 jobs:
   build:
     name: Publish binaries
-    runs-on: ubuntu-latest
+    runs-on: ${{ matrix.os }}
     defaults:
       run:
         shell: bash
+
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest]
 
     steps:
       - uses: actions/checkout@v2
@@ -26,15 +30,24 @@ jobs:
             dbgee/target
           key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
 
+      - name: Get OS name
+        id: read_release
+        shell: bash
+        run: |
+          echo "OS_RELEASE_NAME=$(uname | tr '[A-Z]' '[a-z]')" >> $GITHUB_ENV
+
       - name: Build
         run: |
           cd dbgee
           cargo build --release
 
+      - name: Run tests
+        run: cargo test --verbose
+
       - name: Compress
         run: |
           cd dbgee/target/release
-          tar cvzf dbgee-linux-x64.tar.gz dbgee
+          tar cvzf dbgee-${{ env.OS_RELEASE_NAME }}-x64.tar.gz dbgee
 
       - name: Read the commit message and use it as a body of the new release
         id: read_release
@@ -49,7 +62,7 @@ jobs:
         uses: svenstaro/upload-release-action@v2
         with:
           repo_token: ${{ secrets.GITHUB_TOKEN }}
-          file: dbgee/target/release/dbgee-linux-x64.tar.gz
+          file: dbgee/target/release/dbgee-${{ env.OS_RELEASE_NAME }}-x64.tar.gz
           tag: ${{ github.ref }}
           overwrite: true
           body: |
