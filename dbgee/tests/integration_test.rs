@@ -39,7 +39,7 @@ fn test_run_pid_debugger() -> Result<()> {
         {
             // commands are wrapped by sudo in macOS
             assert_eq!(
-                "'-u' '<USER>' 'tmux' 'new-window' 'sudo' 'gdb' '-tui' '-p' '<NUM>' \nhello\n",
+                "'new-window' 'lldb' '-p' '<NUM>' \nhello\n",
                 &String::from_utf8(output.stdout)?
             );
         }
@@ -63,14 +63,7 @@ fn test_run_dlv() -> Result<()> {
         .collect::<Vec<String>>();
     // The command line for Delve is long, so test only part of it here
     assert!(stdout[0].starts_with("'exec' '--headless'"));
-    if cfg!(target_os = "linux") {
-        assert!(stdout[1].starts_with("'new-window' 'dlv' 'connect'"));
-    } else
-    /* macOS */
-    {
-        // commands are wrapped by sudo in macOS
-        assert!(stdout[1].starts_with("'-u' '<USER>' 'tmux' 'new-window' 'dlv' 'connect'"));
-    }
+    assert!(stdout[1].starts_with("'new-window' 'dlv' 'connect'"));
 
     Ok(())
 }
@@ -103,7 +96,7 @@ fn test_set_pid_debugger() -> Result<()> {
     {
         // commands are wrapped by sudo in macOS
         assert_eq!(
-            "'-u' '<USER>' 'tmux' 'new-window' 'sudo' 'gdb' '-tui' '-p' '<NUM>' \nhello\n",
+            "'new-window' 'lldb' '-p' '<NUM>' \nhello\n",
             &String::from_utf8(debuggee_output.stdout)?
         );
     }
@@ -162,7 +155,7 @@ fn test_run_debuggee_which_is_set_before() -> Result<()> {
     {
         // commands are wrapped by sudo in macOS
         assert_eq!(
-            "'-u' '<USER>' 'tmux' 'new-window' 'sudo' 'gdb' '-tui' '-p' '<NUM>' \nhello\n",
+            "'new-window' 'lldb' '-p' '<NUM>' \nhello\n",
             &String::from_utf8(output.stdout)?
         );
     }

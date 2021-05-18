@@ -6,16 +6,16 @@ use crate::{
 };
 use crate::{Opts, SETOPTS_POSITIONAL_ARGS};
 
+use std::ffi::CString;
 use std::io::Write;
 use std::path::Path;
+use std::process::Command;
 use std::{collections::HashMap, fs::File};
 use std::{env, fs};
-use std::{ffi::CString, io::Read};
 use std::{
     io::{BufRead, BufReader},
     str,
 };
-use std::{os::unix::io::FromRawFd, process::Command};
 use std::{path::PathBuf, str::FromStr};
 
 use anyhow::{anyhow, bail, Context, Result};
@@ -53,16 +53,12 @@ pub struct GdbDebugger;
 impl GdbDebugger {
     pub fn build() -> Result<GdbCompatibleDebugger> {
         let command_builder = |pid: Pid, _name: String| {
-            let mut command = vec![
+            Ok(vec![
                 "gdb".to_owned(),
                 "-tui".to_owned(),
                 "-p".to_owned(),
                 pid.as_raw().to_string(),
-            ];
-            if cfg!(target_os = "macos") {
-                command.insert(0, "sudo".to_string());
-            }
-            Ok(command)
+            ])
         };
         GdbCompatibleDebugger::new("gdb", Box::new(command_builder))
     }
@@ -73,11 +69,11 @@ pub struct LldbDebugger;
 impl LldbDebugger {
     pub fn build() -> Result<GdbCompatibleDebugger> {
         let command_builder = |pid: Pid, _name: String| {
-            let mut command = vec!["lldb".to_owned(), "-p".to_owned(), pid.as_raw().to_string()];
-            if cfg!(target_os = "macos") {
-                command.insert(0, "sudo".to_string());
-            }
-            Ok(command)
+            Ok(vec![
+                "lldb".to_owned(),
+                "-p".to_owned(),
+                pid.as_raw().to_string(),
+            ])
         };
         GdbCompatibleDebugger::new("lldb", Box::new(command_builder))
     }

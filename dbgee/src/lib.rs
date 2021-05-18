@@ -191,8 +191,15 @@ fn build_debugger(debugger: &str, debuggee: &str) -> Result<Box<dyn Debugger>> {
 }
 
 fn detect_debugger(debuggee: &str) -> Result<Box<dyn Debugger>> {
-    // lldb omitted in favor of gdb
-    for debugger in ["dlv", "gdb", "debugpy", "stop-and-write-pid"].iter() {
+    let debuggers = if cfg!(target_os = "linux") {
+        // prefer gdb to lldb  in Linux
+        ["dlv", "gdb", "debugpy", "stop-and-write-pid"]
+    } else {
+        // macOS
+        // prefer lldb
+        ["dlv", "lldb", "debugpy", "stop-and-write-pid"]
+    };
+    for debugger in debuggers.iter() {
         let candidate = build_debugger(debugger, debuggee);
         if candidate.is_err() {
             continue;
