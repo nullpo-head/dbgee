@@ -33,8 +33,8 @@ The current supported languages are C, C++, Rust, Go, Python and any languages w
 
 ### Platforms
 
-Currently only Linux (including WSL2 on Windows) is supported. However, adding macOS support is pretty easy and will be added soon if there are any macOS users.
-Please say hi to me in a GitHub issue.
+- Linux x64 (including WSL2). Tested and built on ubuntu-latest of GitHub action
+- macOS x64. Tested and built on macos-latest of GitHub action
 
 ## Installation
 
@@ -42,9 +42,19 @@ There are two components, `dbgee` command and the optional VSCode extension.
 
 ### `dbgee` command
 
+#### Linux
+
 ```shell
-curl -L -O https://github.com/nullpo-head/dbgee/releases/download/cli-v0.1.0/dbgee-linux-x64.tar.gz
+curl -L -O https://github.com/nullpo-head/dbgee/releases/download/cli-v0.2.0/dbgee-linux-x64.tar.gz
 tar xvf dbgee-linux-x64.tar.gz
+mv dbgee /usr/local/bin/ # Or anywhere in the PATH
+```
+
+#### macOS
+
+```shell
+curl -L -O https://github.com/nullpo-head/dbgee/releases/download/cli-v0.2.0/dbgee-darwin-x64.tar.gz
+tar xvf dbgee-darwin-x64.tar.gz
 mv dbgee /usr/local/bin/ # Or anywhere in the PATH
 ```
 
