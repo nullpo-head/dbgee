@@ -203,12 +203,13 @@ fn test_run_for_vscode() -> Result<()> {
         let fifo_path = "/tmp/dbgee-vscode-debuggees";
         let _ = unistd::mkfifo(fifo_path, nix::sys::stat::Mode::S_IRWXU);
         let mut file = fs::File::open(fifo_path).unwrap();
+        //let json = fs::read_to_string("/tmp/dbgee-vscode-debuggees").unwrap();
         let mut json = String::new();
         file.read_to_string(&mut json).unwrap();
         let _ = sender.send(json);
     });
     let json = receiver
-        .recv_timeout(std::time::Duration::from_secs(20))
+        .recv_timeout(std::time::Duration::from_secs(10))
         .unwrap();
     // assert that it is a json
     assert!(json.starts_with('{'));
