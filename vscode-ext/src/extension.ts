@@ -118,8 +118,8 @@ class DbgeeRequestFifoPath {
 	}
 
 	private async getPath(): Promise<string> {
-		const rootVscodePid = await this.getVscodeSessionId();
-		return `/tmp/dbgee-vscode-debuggee-for-${rootVscodePid}`;
+		const vscodeId = await this.getVscodeSessionId();
+		return `/tmp/dbgee-vscode-debuggee-for-${vscodeId}`;
 	}
 
 	private async getVscodeSessionId(): Promise<string> {
