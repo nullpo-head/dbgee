@@ -1,18 +1,20 @@
 use colored::*;
-use dbgee::{run, Opts};
+use dbgee::{run, LogLevel, Opts};
 use nix::unistd;
 use structopt::StructOpt;
 
 use std::{
     io::Write,
     os::unix::prelude::AsRawFd,
+    str::FromStr,
     sync::atomic::{AtomicBool, Ordering},
 };
 
 fn main() {
-    init_logger();
+    let opts = Opts::from_args();
+    init_logger(&opts.log_level);
 
-    match run(Opts::from_args()) {
+    match run(opts) {
         Ok(exit_status) => {
             std::process::exit(exit_status);
         }
@@ -23,11 +25,31 @@ fn main() {
     }
 }
 
-fn init_logger() {
+fn init_logger(log_level: &Option<LogLevel>) {
     let mut env_logger_builder = env_logger::Builder::new();
-    let is_first_info = AtomicBool::new(true);
+
+    let should_show_info_suppression_notice;
+    if let Some(ref level) = log_level {
+        should_show_info_suppression_notice = false;
+        env_logger_builder.filter_level(
+            log::LevelFilter::from_str(
+                <LogLevel as strum::VariantNames>::VARIANTS[*level as usize],
+            )
+            .unwrap(),
+        );
+    } else if let Ok(true) = unistd::isatty(std::io::stderr().as_raw_fd()) {
+        should_show_info_suppression_notice = true;
+        env_logger_builder.filter_level(log::LevelFilter::Info);
+    } else {
+        should_show_info_suppression_notice = false;
+        env_logger_builder.filter_level(log::LevelFilter::Error);
+    }
+    let should_show_info_suppression_notice = AtomicBool::new(should_show_info_suppression_notice);
+
     env_logger_builder.format(move |buf, record| {
-        if record.level() > log::Level::Error && is_first_info.fetch_and(false, Ordering::SeqCst) {
+        if record.level() > log::Level::Error
+            && should_show_info_suppression_notice.fetch_and(false, Ordering::SeqCst)
+        {
             writeln!(
                 buf,
                 "{} These dbgee's messages are suppressed if the stderr is redirected or piped.",
@@ -38,18 +60,14 @@ fn init_logger() {
             buf,
             "{}{} {}",
             "[Dbgee]".bright_green(),
-            if record.level() <= log::Level::Error {
-                format!(" {}:", record.level())
-            } else {
-                "".to_owned()
+            match record.level() {
+                log::Level::Info => "".to_string(),
+                log::Level::Error | log::Level::Warn =>
+                    format!("[{}]", record.level()).red().to_string(),
+                _ => format!("[{}]", record.level()).bright_green().to_string(),
             },
             record.args()
         )
     });
-    if let Ok(true) = unistd::isatty(std::io::stderr().as_raw_fd()) {
-        env_logger_builder.filter_level(log::LevelFilter::Info);
-    } else {
-        env_logger_builder.filter_level(log::LevelFilter::Error);
-    }
     env_logger_builder.init();
 }

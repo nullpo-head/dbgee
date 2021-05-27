@@ -31,8 +31,21 @@ use crate::debugger::{
 ///  
 #[structopt(name = "dbgee")]
 pub struct Opts {
+    #[structopt(short, long)]
+    pub log_level: Option<LogLevel>,
     #[structopt(subcommand)]
     pub command: Subcommand,
+}
+
+#[derive(Copy, Clone, Debug, EnumString, EnumVariantNames)]
+#[strum(serialize_all = "kebab-case")]
+pub enum LogLevel {
+    Off,
+    Error,
+    Warn,
+    Info,
+    Debug,
+    Trace,
 }
 
 #[derive(Debug, StructOpt)]
