@@ -103,7 +103,7 @@ class DbgeeRequestListener {
 				}
 			}
 		};
-		_listen().catch(reason => console.log(`Error on requests listening. Active debugger session is disabled. Error: ${reason}`));
+		_listen().catch(reason => vscode.window.showErrorMessage(`[Dbgee] Error on requests listening. Active debugger session is disabled. Error: ${reason}`));
 	}
 }
 
