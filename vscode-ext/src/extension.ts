@@ -175,6 +175,15 @@ class DebugSessionTracker {
 
 class DbgeeDebuggerConfigurationFactory {
 	getDebuggerConfigurationForRequest(request: DbgeeAttachRequest): vscode.DebugConfiguration | undefined {
+		if (vscode.workspace.workspaceFolders?.[0]) {
+			const launchjson = vscode.workspace.getConfiguration("launch", vscode.workspace.workspaceFolders[0].uri);
+			const configs = launchjson.get("configurations") as vscode.DebugConfiguration[] || [];
+			for (const debugConfig of configs) {
+				if (debugConfig.name.startsWith("(default)Dbgee:") && debugConfig.type === request.debuggerType) {
+					return debugConfig;
+				}
+			}
+		}
 		for (const debugConfig of this.getInitialConfigurations()) {
 			if (debugConfig.initialConfigurations[0].type === request.debuggerType) {
 				return debugConfig.initialConfigurations[0];
