@@ -2,7 +2,7 @@
     "name": "dbgee",
     "displayName": "Dbgee-vscode",
     "description": "Dbgee - the zero-configuration debuggee for debuggers",
-    "version": "0.1.0",
+    "version": "0.2.0",
     "publisher": "nullpo-head",
     "license": "SEE LICENSE IN LICENSE.txt",
     "engines": {
