@@ -203,7 +203,23 @@
                     }
                 ]
             }
-        ]
+        ],
+        "configuration": {
+            "title": "Dbgee-vscode",
+            "properties": {
+                "dbgee.logLevel": {
+                    "type": "string",
+                    "default": "off",
+                    "enum": [
+                        "off",
+                        "trace",
+                        "debug",
+                        "warn",
+                        "error"
+                    ]
+                }
+            }
+        }
     },
     "scripts": {
         "vscode:prepublish": "yarn run compile",

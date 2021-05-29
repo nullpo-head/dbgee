@@ -46,14 +46,14 @@ export function activate(context: vscode.ExtensionContext) {
 }
 
 class DbgeeConnector {
-	private retrievedProperties: Set<String>;
+	private retrievedProperties: Set<string>;
 	private attachInformation: DbgeeAttachInformation | undefined;
 
 	constructor() {
-		this.retrievedProperties = new Set<String>();
+		this.retrievedProperties = new Set<string>();
 	}
 
-	async getAttachInformation(key: keyof DbgeeAttachInformation): Promise<String | undefined> {
+	async getAttachInformation(key: keyof DbgeeAttachInformation): Promise<string | undefined> {
 		if (this.attachInformation === undefined || this.retrievedProperties.has(key)) {
 			// reading the same key twice indicates that we're in a new session
 			await this.refreshAttachInformation();
@@ -65,10 +65,10 @@ class DbgeeConnector {
 	async refreshAttachInformation() {
 		const fifoPath = "/tmp/dbgee-vscode-debuggees";
 		makeFifoUnlessExists(fifoPath);
-		console.log(`waiting attach information`);
+		logger.trace(`waiting attach information`);
 		this.attachInformation = JSON.parse(await readFifo(fifoPath)) as DbgeeAttachInformation;
-		this.retrievedProperties = new Set<String>();
-		console.log(`got attach information ${JSON.stringify(this.attachInformation)}`);
+		this.retrievedProperties = new Set<string>();
+		logger.trace(`got attach information ${JSON.stringify(this.attachInformation)}`);
 	}
 }
 
@@ -96,23 +96,23 @@ class DbgeeRequestListener {
 			while (true) {
 				const fifoPath = await this.requestFifoPath.path;
 				await makeFifoUnlessExists(fifoPath);
-				console.log(`${listeningLoop} listening`);
+				logger.trace(`[${listeningLoop}] listening`);
 				const request = JSON.parse(await readFifo(await this.requestFifoPath.path)) as DbgeeAttachRequest;
-				console.log(`${listeningLoop} got attach request: ${JSON.stringify(request)}`);
+				logger.trace(`[${listeningLoop}] got attach request: ${JSON.stringify(request)}`);
 				const config = this.debuggerConfigFactory.getDebuggerConfigurationForRequest(request);
 				if (!config) {
-					console.log(`${listeningLoop} no config found for the config`);
+					logger.trace(`[${listeningLoop}] no config found for the config`);
 					continue;
 				}
 				if (!this.debugSessionTracker.isDebugSessionActive) {
-					console.log(`${listeningLoop} starting the debug session`);
+					logger.trace(`[${listeningLoop}] starting the debug session`);
 					vscode.debug.startDebugging(vscode.workspace.workspaceFolders?.[0], config);
 				}
-				console.log(`${listeningLoop} end of listening finished`);
+				logger.trace(`[${listeningLoop}] end of listening finished`);
 				listeningLoop++;
 			}
 		};
-		_listen().catch(reason => vscode.window.showErrorMessage(`[Dbgee] Error on requests listening. Active debugger session is disabled. Error: ${reason}`));
+		_listen().catch(reason => logger.error(`Error on requests listening. Active debugger session is disabled. Error: ${reason}`));
 	}
 }
 
@@ -139,7 +139,7 @@ class DbgeeRequestFifoPath {
 		// Use it to distinguish VSCode's windows
 		////
 		const lsofPromise = new Promise<string>((resolve, reject) => {
-			const findGitSocketPath = `awk '($2 == ${process.pid} && $5 == "unix" && $NF ~ /git/) { print $NF; }'`;
+			const findGitSocketPath = `awk '($2 == ${process.pid} && $5 == "unix") { print $0; }' | grep -Eo '([^ \t]+git[^ \t]+)'`;
 			child_process.exec(`basename $(lsof -U | ${findGitSocketPath})`, (error, stdout, _) => {
 				if (error) {
 					reject(error);
@@ -166,11 +166,11 @@ class DebugSessionTracker {
 				return {
 					onWillStartSession: () => {
 						self._isDebugSessionActive = true;
-						console.log("session active");
+						logger.trace("session active");
 					},
 					onWillStopSession: () => {
 						self._isDebugSessionActive = false;
-						console.log("session inactive");
+						logger.trace("session inactive");
 					}
 				};
 			}
@@ -198,7 +198,7 @@ class DbgeeDebuggerConfigurationFactory {
 				return debugConfig.initialConfigurations[0];
 			}
 		}
-		vscode.window.showErrorMessage(`Dbgee command has requested unknown debugger: ${request.debuggerType}`);
+		logger.error(`Dbgee command has requested unknown debugger: ${request.debuggerType}`);
 		return;
 	}
 
@@ -236,19 +236,20 @@ class DbgeeDebuggerConfigurationProvider {
 async function readFifo(path: string): Promise<string> {
 	return new Promise<string>((resolve, reject) => {
 		nodeFs.open(path, nodeFs.constants.O_RDONLY | nodeFs.constants.O_NONBLOCK, (err, fd) => {
-			console.log(`opened fifo: ${path}`);
+			logger.trace(`opened fifo: ${path}`);
 			if (err) {
-				console.log(`fifo error: ${path}`);
+				logger.error(`unknown error happend during opening a fifo. path: ${path}`);
 				reject(err);
 			}
-			console.log(`fifo as socket: ${path}`);
+			logger.trace(`fifo as socket: ${path}`);
 			const pipeAsSocket = new net.Socket({ fd });
 			pipeAsSocket.on("data", (data) => {
 				const content = data.toString();
-				console.log(`fifo on data: ${path}, ${content}`);
+				logger.trace(`fifo on data: ${path}, ${content}`);
 				if (process.platform === "darwin") {
 					// due to a bug of macOS, closing of fifo cannot be detected by libuv and Node.js
 					// so, close it here manually.
+					// https://github.com/golang/go/issues/24164
 					pipeAsSocket.destroy();
 				}
 				resolve(content);
@@ -282,6 +283,46 @@ interface DbgeeAttachRequest {
 	protocolVersion: string;
 	debuggerType: string;
 }
+
+
+type LogLevel = "trace" | "debug" | "warn" | "error" | "off";
+const LOG_LEVELS: LogLevel[] = ["trace", "debug", "warn", "error", "off"];
+
+class Logger {
+	private level: LogLevel;
+	private hasAnyOutput: boolean;
+	private outputChannel: vscode.OutputChannel | undefined;
+
+	constructor(level: LogLevel) {
+		this.level = level;
+		this.hasAnyOutput = false;
+	}
+
+	private compareLogLevel(l1: LogLevel, l2: LogLevel): number {
+		return LOG_LEVELS.indexOf(l1) - LOG_LEVELS.indexOf(l2);
+	}
+
+	log(s: string, level: LogLevel) {
+		if (this.compareLogLevel(level, this.level) >= 0) {
+			if (!this.hasAnyOutput) {
+				this.hasAnyOutput = true;
+				this.outputChannel = vscode.window.createOutputChannel("Dbgee-vscode");
+			}
+			this.outputChannel?.appendLine(`[${level}] ${s}`);
+			console.log("[Dbgee] " + s);
+		}
+	}
+
+	trace(s: string) {
+		this.log(s, "trace");
+	}
+
+	error(s: string) {
+		this.log(s, "error");
+		vscode.window.showErrorMessage(`[Dbgee-vscode][Error] ${s}`);
+	}
+}
+const logger = new Logger(vscode.workspace.getConfiguration("dbgee")["logLevel"] || "off");
 
 export function deactivate() {
 	for (const deactivate of deactivators) {
