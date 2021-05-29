@@ -19,6 +19,10 @@ or when your program is launched by some script.
 
 <img alt="demo image" src="vscode-ext/images/DbgeeSetInVsCode.gif" width="850px">
 
+### Start a debug session with custom settings
+
+<img alt="demo image" src="vscode-ext/images/DbgeeCustomConfig.gif" width="850px">
+
 ### Launch CUI debuggers in tmux
 
 <img alt="demo image" src="vscode-ext/images/DbgeeRunSetInTmux.gif" width="850px">
