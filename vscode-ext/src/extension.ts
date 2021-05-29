@@ -17,11 +17,12 @@ export function activate(context: vscode.ExtensionContext) {
 
 	const dbgeeConnector = new DbgeeConnector();
 	const attachInfoCommandFactory = (information: keyof DbgeeAttachInformation) => (async () => {
-		logger.trace(`getting attach information: ${information}`);
+		logger.trace(`getting attach information of: ${information}`);
 		const info = await dbgeeConnector.getAttachInformation(information);
+		logger.trace(`got attach information of: ${information}`);
 
 		if (!info) {
-			vscode.window.showErrorMessage(`${information} is not found in the information given by dbgee.`);
+			logger.error(`${information} is not found in the information given by dbgee.`);
 			return '';
 		}
 
@@ -41,7 +42,7 @@ export function activate(context: vscode.ExtensionContext) {
 	);
 	const dbgeeDebuggerConfigurationProvider = new DbgeeDebuggerConfigurationProvider(dbgeeDebuggerConfigurationFactory);
 
-	debugSessionTracker.activate();
+	debugSessionTracker.activate(dbgeeConnector);
 	dbgeeRequestListener.listen();
 	dbgeeDebuggerConfigurationProvider.registerToVsCode();
 }
@@ -49,9 +50,15 @@ export function activate(context: vscode.ExtensionContext) {
 class DbgeeConnector {
 	private retrievedProperties: Set<string>;
 	private attachInformation: DbgeeAttachInformation | undefined;
+	private subscribers: ((isWaiting: boolean) => void)[];
 
 	constructor() {
 		this.retrievedProperties = new Set<string>();
+		this.subscribers = [];
+	}
+
+	subscribeWaitingStatus(subscriber: (isWaiting: boolean) => void) {
+		this.subscribers.push(subscriber);
 	}
 
 	async getAttachInformation(key: keyof DbgeeAttachInformation): Promise<string | undefined> {
@@ -64,15 +71,20 @@ class DbgeeConnector {
 	}
 
 	async refreshAttachInformation() {
-		const fifoPath = "/tmp/dbgee-vscode-debuggees";
-		makeFifoUnlessExists(fifoPath);
 		logger.trace(`waiting attach information`);
-		this.attachInformation = JSON.parse(await readFifo(fifoPath, 30_000)) as DbgeeAttachInformation;
-		if (detectSemVerBreakingChange(PROTOCOL_VERSION, this.attachInformation.protocolVersion)) {
-			throw new Error("incompatible protocol version");
+		this.subscribers.forEach((subscriber) => subscriber(true));
+		try {
+			const fifoPath = "/tmp/dbgee-vscode-debuggees";
+			await makeFifoUnlessExists(fifoPath);
+			this.attachInformation = JSON.parse(await readFifo(fifoPath, 30_000)) as DbgeeAttachInformation;
+			if (detectSemVerBreakingChange(PROTOCOL_VERSION, this.attachInformation.protocolVersion)) {
+				throw new Error("incompatible protocol version");
+			}
+			this.retrievedProperties = new Set<string>();
+			logger.trace(`got attach information ${JSON.stringify(this.attachInformation)}`);
+		} finally {
+			this.subscribers.forEach((subscriber) => subscriber(false));
 		}
-		this.retrievedProperties = new Set<string>();
-		logger.trace(`got attach information ${JSON.stringify(this.attachInformation)}`);
 	}
 }
 
@@ -85,13 +97,7 @@ class DbgeeRequestListener {
 		this.requestFifoPath = new DbgeeRequestFifoPath();
 		this.debuggerConfigFactory = debuggerConfigFactory;
 		this.debugSessionTracker = debugSessionTracker;
-		registerDeactivate(() => {
-			const _deactivate = async () => {
-				const path = await this.requestFifoPath.path;
-				nodeFs.unlink(path, (_) => { });
-			};
-			_deactivate();
-		});
+		registerDeactivate(() => this.unlinkFifo());
 	}
 
 	listen() {
@@ -119,7 +125,15 @@ class DbgeeRequestListener {
 				listeningLoop++;
 			}
 		};
-		_listen().catch(reason => logger.error(`Error on requests listening. Active debugger session is disabled. Error: ${reason}`));
+		_listen().catch(reason => {
+			logger.error(`Error on requests listening. Active debugger session is disabled. Error: ${reason}`);
+			this.unlinkFifo();
+		});
+	}
+
+	async unlinkFifo() {
+		const path = await this.requestFifoPath.path;
+		nodeFs.unlink(path, (_) => { });
 	}
 }
 
@@ -164,19 +178,31 @@ class DbgeeRequestFifoPath {
 }
 
 class DebugSessionTracker {
-	private _isDebugSessionActive: boolean = false;
+	private isWaitingFifo: boolean = false;
+	private isOtherDebugSessionActive: boolean = false;
 
-	activate() {
+	activate(dbgeeConnector: DbgeeConnector) {
 		const self = this;
+		dbgeeConnector.subscribeWaitingStatus((isWaitingFifo: boolean) => {
+			if (isWaitingFifo) {
+				this.isWaitingFifo = true;
+			} else {
+				// Set this.isWaitingFifo to false after a while to prevent
+				// the attach request from starting another session at the same time.
+				// Unfortunately this happens because onWillStartSession isn't triggered
+				// until the debug configurations are completely resolved.
+				setTimeout(() => { this.isWaitingFifo = false; }, 2000);
+			}
+		});
 		vscode.debug.registerDebugAdapterTrackerFactory("*", {
 			createDebugAdapterTracker(session: vscode.DebugSession) {
 				return {
 					onWillStartSession: () => {
-						self._isDebugSessionActive = true;
+						self.isOtherDebugSessionActive = true;
 						logger.trace("session active");
 					},
 					onWillStopSession: () => {
-						self._isDebugSessionActive = false;
+						self.isOtherDebugSessionActive = false;
 						logger.trace("session inactive");
 					}
 				};
@@ -185,7 +211,7 @@ class DebugSessionTracker {
 	}
 
 	get isDebugSessionActive(): boolean {
-		return this._isDebugSessionActive;
+		return this.isOtherDebugSessionActive || this.isWaitingFifo;
 	}
 }
 
