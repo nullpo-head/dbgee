@@ -108,7 +108,7 @@ impl VsCode {
         VsCode {
             attach_information_fifo_path: "/tmp/dbgee-vscode-debuggees".to_owned(),
             attach_request_fifo_path: VsCode::build_attach_request_fifo_path(),
-            protocol_version: "0.2.0",
+            protocol_version: "1.1.0",
         }
     }
 

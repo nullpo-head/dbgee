@@ -6,7 +6,7 @@ import * as nodeFs from 'fs';
 import * as nodeUtil from 'util';
 import * as net from 'net';
 
-const PROTOCOL_VERSION = "0.2.0";
+const PROTOCOL_VERSION = "1.1.0";
 
 type Deactivate = () => void;
 type RegisterDeactivate = (deactivate: Deactivate) => void;
@@ -67,6 +67,9 @@ class DbgeeConnector {
 		makeFifoUnlessExists(fifoPath);
 		logger.trace(`waiting attach information`);
 		this.attachInformation = JSON.parse(await readFifo(fifoPath)) as DbgeeAttachInformation;
+		if (detectSemVerBreakingChange(PROTOCOL_VERSION, this.attachInformation.protocolVersion)) {
+			throw new Error("incompatible protocol version");
+		}
 		this.retrievedProperties = new Set<string>();
 		logger.trace(`got attach information ${JSON.stringify(this.attachInformation)}`);
 	}
@@ -98,6 +101,9 @@ class DbgeeRequestListener {
 				await makeFifoUnlessExists(fifoPath);
 				logger.trace(`[${listeningLoop}] listening`);
 				const request = JSON.parse(await readFifo(await this.requestFifoPath.path)) as DbgeeAttachRequest;
+				if (detectSemVerBreakingChange(PROTOCOL_VERSION, request.protocolVersion)) {
+					throw new Error("incompatible protocol version");
+				}
 				logger.trace(`[${listeningLoop}] got attach request: ${JSON.stringify(request)}`);
 				const config = this.debuggerConfigFactory.getDebuggerConfigurationForRequest(request);
 				if (!config) {
@@ -265,6 +271,17 @@ async function makeFifoUnlessExists(path: string) {
 	}
 }
 
+function detectSemVerBreakingChange(currentVer: string, requestedVer?: string): boolean {
+	if (!requestedVer) {
+		requestedVer = "1.0.0";
+	}
+	if (requestedVer.split(".")[0] === currentVer.split(".")[0]) {
+		return false;
+	}
+
+	logger.error("Dbgee command is an incompatible version of this VSCode extension. Please upgrade Dbgee-vscode extension and the dbgee command to the latest versions.");
+	return true;
+}
 
 interface DebuggerConfig {
 	type: string;
