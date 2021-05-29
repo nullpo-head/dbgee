@@ -17,6 +17,7 @@ export function activate(context: vscode.ExtensionContext) {
 
 	const dbgeeConnector = new DbgeeConnector();
 	const attachInfoCommandFactory = (information: keyof DbgeeAttachInformation) => (async () => {
+		logger.trace(`getting attach information: ${information}`);
 		const info = await dbgeeConnector.getAttachInformation(information);
 
 		if (!info) {
@@ -54,7 +55,7 @@ class DbgeeConnector {
 	}
 
 	async getAttachInformation(key: keyof DbgeeAttachInformation): Promise<string | undefined> {
-		if (this.attachInformation === undefined || this.retrievedProperties.has(key)) {
+		if (!this.attachInformation || this.retrievedProperties.has(key)) {
 			// reading the same key twice indicates that we're in a new session
 			await this.refreshAttachInformation();
 		}
@@ -66,7 +67,7 @@ class DbgeeConnector {
 		const fifoPath = "/tmp/dbgee-vscode-debuggees";
 		makeFifoUnlessExists(fifoPath);
 		logger.trace(`waiting attach information`);
-		this.attachInformation = JSON.parse(await readFifo(fifoPath)) as DbgeeAttachInformation;
+		this.attachInformation = JSON.parse(await readFifo(fifoPath, 30_000)) as DbgeeAttachInformation;
 		if (detectSemVerBreakingChange(PROTOCOL_VERSION, this.attachInformation.protocolVersion)) {
 			throw new Error("incompatible protocol version");
 		}
@@ -239,7 +240,7 @@ class DbgeeDebuggerConfigurationProvider {
 	}
 }
 
-async function readFifo(path: string): Promise<string> {
+async function readFifo(path: string, timeout?: number): Promise<string> {
 	return new Promise<string>((resolve, reject) => {
 		nodeFs.open(path, nodeFs.constants.O_RDONLY | nodeFs.constants.O_NONBLOCK, (err, fd) => {
 			logger.trace(`opened fifo: ${path}`);
@@ -247,9 +248,16 @@ async function readFifo(path: string): Promise<string> {
 				logger.error(`unknown error happend during opening a fifo. path: ${path}`);
 				reject(err);
 			}
-			logger.trace(`fifo as socket: ${path}`);
+
+			let completed = false;
 			const pipeAsSocket = new net.Socket({ fd });
+			logger.trace(`fifo as socket: ${path}`);
 			pipeAsSocket.on("data", (data) => {
+				if (completed) {
+					return;
+				}
+				completed = true;
+
 				const content = data.toString();
 				logger.trace(`fifo on data: ${path}, ${content}`);
 				if (process.platform === "darwin") {
@@ -260,6 +268,17 @@ async function readFifo(path: string): Promise<string> {
 				}
 				resolve(content);
 			});
+			if (timeout) {
+				setTimeout(() => {
+					if (completed) {
+						return;
+					}
+					completed = true;
+					pipeAsSocket.destroy();
+					logger.error("Waiting for attach information has timedout");
+					reject("reading from fifo has timedout");
+				}, timeout);
+			}
 		});
 	});
 }
