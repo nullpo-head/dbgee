@@ -1,5 +1,11 @@
 # Change Log
 
+## [0.2.1]
+
+### Fix
+
+- Fix error was shown on Windows.
+
 ## [0.2.0]
 
 ### New Features

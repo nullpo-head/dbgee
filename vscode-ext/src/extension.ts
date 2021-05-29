@@ -14,8 +14,12 @@ const deactivators: Deactivate[] = [];
 const registerDeactivate = (deactivate: Deactivate) => { deactivators.push(deactivate); };
 
 export function activate(context: vscode.ExtensionContext) {
-
+	if (!["linux", "darwin"].includes(process.platform)) {
+		logger.trace("Unsupported platform. Exiting..");
+		return;
+	}
 	const dbgeeConnector = new DbgeeConnector();
+
 	const attachInfoCommandFactory = (information: keyof DbgeeAttachInformation) => (async () => {
 		logger.trace(`getting attach information of: ${information}`);
 		const info = await dbgeeConnector.getAttachInformation(information);
@@ -28,7 +32,6 @@ export function activate(context: vscode.ExtensionContext) {
 
 		return info;
 	});
-
 	context.subscriptions.push(vscode.commands.registerCommand('dbgee.getPid', attachInfoCommandFactory("pid")));
 	context.subscriptions.push(vscode.commands.registerCommand('dbgee.getDebuggerPort', attachInfoCommandFactory("debuggerPort")));
 	context.subscriptions.push(vscode.commands.registerCommand('dbgee.getProgramName', attachInfoCommandFactory("programName")));
