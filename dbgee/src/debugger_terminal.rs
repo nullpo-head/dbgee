@@ -118,6 +118,8 @@ impl VsCode {
         fifo_path: String,
         log_after_sent: Option<String>,
     ) -> Result<()> {
+        log::debug!("sending json to vscode");
+        log::trace!("json: {}", json);
         match unistd::mkfifo(fifo_path.as_str(), nix::sys::stat::Mode::S_IRWXU) {
             Err(nix::Error::Sys(nix::errno::Errno::EEXIST)) => Ok(()),
             other => other,
