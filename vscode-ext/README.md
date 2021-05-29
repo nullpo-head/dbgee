@@ -1,6 +1,6 @@
 # Dbgee - the Zero-Configuration Debuggee for Debuggers
 
-With Dbgee, you can start a debug session without writing any `launch.json` by 
+With Dbgee, you can start a debug session without writing any `launch.json` by
 just launching your program in the integrated terminal.
 Also, Dbgee's ability to pre-set a debug session to start allows you to
 start debugging no matter how your program is launched.
@@ -47,12 +47,9 @@ You need actual debugger extensions for each language to start debug sessions.
 
 ### Platforms
 
-Currently only Linux (including WSL2 on Windows) is supported. However, adding macOS support is pretty easy and will be added soon if there are any macOS users. Please say hi to me in a GitHub issue.
+- Linux x64 (including WSL2). Tested and built on ubuntu-latest of GitHub action
+- macOS x64. Tested and built on macos-latest of GitHub action
 
 ### Languages
 
 The current supported languages are C, C++, Rust, Go, Python and any languages which Gdb, LLDB, or CodeLLDB support.
-
-## Extension Settings
-
-Dbgee VSCode extension has no setting for now.
