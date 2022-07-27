@@ -168,7 +168,7 @@ impl Debugger for GdbCompatibleDebugger {
     }
 
     fn is_debuggee_surely_supported(&self, debuggee: &str) -> Result<bool> {
-        let file_output = get_cached_file_output(&debuggee)?;
+        let file_output = get_cached_file_output(debuggee)?;
         if file_output.contains("ELF") || file_output.contains("Mach-O") {
             return Ok(true);
         }

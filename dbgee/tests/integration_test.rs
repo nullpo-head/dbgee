@@ -34,9 +34,9 @@ fn test_run_pid_debugger() -> Result<()> {
                 "'new-window' 'gdb' '-tui' '-p' '<NUM>' \nhello\n",
                 &String::from_utf8(output.stdout)?
             );
-        } else
+        }
         /* macOS */
-        {
+        else {
             // commands are wrapped by sudo in macOS
             assert_eq!(
                 "'new-window' 'lldb' '-p' '<NUM>' \nhello\n",
@@ -91,9 +91,9 @@ fn test_set_pid_debugger() -> Result<()> {
             "'new-window' 'gdb' '-tui' '-p' '<NUM>' \nhello\n",
             &String::from_utf8(debuggee_output.stdout)?
         );
-    } else
+    }
     /* macOS */
-    {
+    else {
         // commands are wrapped by sudo in macOS
         assert_eq!(
             "'new-window' 'lldb' '-p' '<NUM>' \nhello\n",
@@ -150,9 +150,9 @@ fn test_run_debuggee_which_is_set_before() -> Result<()> {
             "'new-window' 'gdb' '-tui' '-p' '<NUM>' \nhello\n",
             &String::from_utf8(output.stdout)?
         );
-    } else
+    }
     /* macOS */
-    {
+    else {
         // commands are wrapped by sudo in macOS
         assert_eq!(
             "'new-window' 'lldb' '-p' '<NUM>' \nhello\n",

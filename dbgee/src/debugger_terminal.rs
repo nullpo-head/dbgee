@@ -126,7 +126,7 @@ impl VsCode {
         }?;
         std::thread::spawn(move || {
             if let Ok(mut fifo) = File::create(fifo_path) {
-                let _ = fifo.write_all(&json.as_bytes());
+                let _ = fifo.write_all(json.as_bytes());
                 if let Some(log) = log_after_sent {
                     log::info!("{}", log);
                 }
