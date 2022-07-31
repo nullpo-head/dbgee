@@ -16,10 +16,11 @@ fn main() {
 
     match run(opts) {
         Ok(exit_status) => {
+            log::debug!("exiting with {}", exit_status);
             std::process::exit(exit_status);
         }
         Err(e) => {
-            log::error!("{}", e);
+            log::error!("{:?}", e);
             std::process::exit(1);
         }
     }
