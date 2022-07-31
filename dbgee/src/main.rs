@@ -19,7 +19,7 @@ fn main() {
             std::process::exit(exit_status);
         }
         Err(e) => {
-            log::error!("{}", e);
+            log::error!("{:?}", e);
             std::process::exit(1);
         }
     }
