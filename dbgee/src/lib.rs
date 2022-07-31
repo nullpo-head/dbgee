@@ -73,6 +73,8 @@ pub struct RunOpts {
     attach_opts: AttachOpts,
 }
 
+// Positional arguments of SetOpts. `debugger::set_exec_to_dbgee` needs this constants
+// in order to construct `$ dbgee run` command to launch a debugger
 const SETOPTS_POSITIONAL_ARGS: [&str; 2] = ["debuggee", "start-cmd"];
 
 /// Replaces the debuggee with a wrapper script, so that the debugger will be attached to it whenever
@@ -176,16 +178,24 @@ pub fn run(opts: Opts) -> Result<i32> {
     match opts.command {
         Subcommand::Run(run_opts) => {
             let mut debugger_terminal = build_debugger_terminal(&run_opts.attach_opts.terminal);
-            let pid = debugger.run(&run_opts, debugger_terminal.as_mut())?;
+            let pid = debugger.run(
+                &run_opts.debuggee,
+                run_opts.debuggee_args.iter().map(String::as_str).collect(),
+                debugger_terminal.as_mut(),
+            )?;
             Ok(wait_until_exit(pid)?)
         }
         Subcommand::Set(set_opts) => {
             let mut debugger_terminal = build_debugger_terminal(&set_opts.attach_opts.terminal);
-            debugger.set(&set_opts, debugger_terminal.as_mut())?;
+            debugger.set(
+                &set_opts.debuggee,
+                set_opts.start_cmd.iter().map(String::as_str).collect(),
+                debugger_terminal.as_mut(),
+            )?;
             Ok(0)
         }
         Subcommand::Unset(unset_opts) => {
-            debugger.unset(&unset_opts)?;
+            debugger.unset(&unset_opts.debuggee)?;
             Ok(0)
         }
     }
