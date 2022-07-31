@@ -3,7 +3,7 @@ use crate::{
         command_exists, get_abspath, get_cached_command_output, get_cached_file_output,
         get_valid_executable_path,
     },
-    DebuggerTerminal, RunOpts, SetOpts, UnsetOpts,
+    DebuggerTerminal,
 };
 use crate::{Opts, SETOPTS_POSITIONAL_ARGS};
 
@@ -30,9 +30,45 @@ use structopt::StructOpt;
 use strum::{Display, EnumString};
 
 pub trait Debugger {
-    fn run(&mut self, run_opts: &RunOpts, terminal: &mut dyn DebuggerTerminal) -> Result<Pid>;
-    fn set(&mut self, set_opts: &SetOpts, terminal: &mut dyn DebuggerTerminal) -> Result<()>;
-    fn unset(&mut self, unset_opts: &UnsetOpts) -> Result<()>;
+    /// Runs and Attaches to the debuggee.
+    ///
+    /// # Arguments
+    ///
+    /// * `debuggee` - Path to the debuggee file
+    /// * `args` - Command line arguments of `debuggee`
+    /// * `terminal` - Terminal where debuggee launches
+    ///
+    fn run(
+        &mut self,
+        debuggee: &str,
+        args: Vec<&str>,
+        terminal: &mut dyn DebuggerTerminal,
+    ) -> Result<Pid>;
+
+    /// Replaces the debuggee file with a wrapper script which attaches the debugger.
+    ///
+    /// # Arguments
+    ///
+    /// * `debuggee` - Path to the debuggee file
+    /// * `start_cmd` - If `len()` > 0, spawn `start_cmd` after wrapping the debuggee file.
+    ///    After `start_cmd` completes, `debuggee` will be automatically restored.
+    /// * `terminal` - Terminal where debuggee launches
+    ///
+    fn set(
+        &mut self,
+        debuggee: &str,
+        start_cmd: Vec<&str>,
+        terminal: &mut dyn DebuggerTerminal,
+    ) -> Result<()>;
+
+    /// Restore the debuggee file which was replaced with the wrapper script by `set`.
+    ///
+    /// # Arguments
+    ///
+    /// * `debuggee` - Path to the debuggee file, that is, path to the wrapper script
+    ///
+    fn unset(&mut self, debuggee: &str) -> Result<()>;
+
     fn build_attach_commandline(&self) -> Result<Vec<String>>;
     fn build_attach_information(&self) -> Result<HashMap<AttachInformationKey, String>>;
     // Note that a debugger could support debuggee even if is_surely_supported_debuggee == false
@@ -109,24 +145,31 @@ impl GdbCompatibleDebugger {
 }
 
 impl Debugger for GdbCompatibleDebugger {
-    fn run(&mut self, run_opts: &RunOpts, terminal: &mut dyn DebuggerTerminal) -> Result<Pid> {
-        let debuggee_abspath = get_path_of_unset_debuggee(&run_opts.debuggee)?;
-        let debuggee_pid = run_and_stop_dbgee(
-            &debuggee_abspath,
-            run_opts.debuggee_args.iter().map(String::as_str),
-        )?;
+    fn run(
+        &mut self,
+        debuggee: &str,
+        args: Vec<&str>,
+        terminal: &mut dyn DebuggerTerminal,
+    ) -> Result<Pid> {
+        let debuggee_abspath = get_path_of_unset_debuggee(debuggee)?;
+        let debuggee_pid = run_and_stop_dbgee(&debuggee_abspath, args.into_iter())?;
         self.debuggee_pid = Some(debuggee_pid);
         self.debuggee_path = Some(debuggee_abspath);
         terminal.open(self)?;
         Ok(debuggee_pid)
     }
 
-    fn set(&mut self, set_opts: &SetOpts, terminal: &mut dyn DebuggerTerminal) -> Result<()> {
-        set_to_exec_dgeee(set_opts, terminal)
+    fn set(
+        &mut self,
+        debuggee: &str,
+        start_cmd: Vec<&str>,
+        _terminal: &mut dyn DebuggerTerminal,
+    ) -> Result<()> {
+        set_to_exec_dgeee(debuggee, start_cmd)
     }
 
-    fn unset(&mut self, unset_opts: &UnsetOpts) -> Result<()> {
-        unset_from_exec_dbgee(unset_opts)
+    fn unset(&mut self, debuggee: &str) -> Result<()> {
+        unset_from_exec_dbgee(debuggee)
     }
 
     fn build_attach_commandline(&self) -> Result<Vec<String>> {
@@ -193,8 +236,13 @@ impl DelveDebugger {
 }
 
 impl Debugger for DelveDebugger {
-    fn run(&mut self, run_opts: &RunOpts, terminal: &mut dyn DebuggerTerminal) -> Result<Pid> {
-        let debuggee_abspath = get_path_of_unset_debuggee(&run_opts.debuggee)?;
+    fn run(
+        &mut self,
+        debuggee: &str,
+        args: Vec<&str>,
+        terminal: &mut dyn DebuggerTerminal,
+    ) -> Result<Pid> {
+        let debuggee_abspath = get_path_of_unset_debuggee(debuggee)?;
         self.port = Some(5679);
         let debugger_args: Vec<&str> = vec![
             "exec",
@@ -208,7 +256,7 @@ impl Debugger for DelveDebugger {
             "--",
         ]
         .into_iter()
-        .chain(run_opts.debuggee_args.iter().map(|s| s.as_str()))
+        .chain(args.into_iter())
         .collect();
 
         if cfg!(target_os = "macos") {
@@ -221,12 +269,18 @@ impl Debugger for DelveDebugger {
         Ok(pid)
     }
 
-    fn set(&mut self, set_opts: &SetOpts, terminal: &mut dyn DebuggerTerminal) -> Result<()> {
-        set_to_exec_dgeee(set_opts, terminal)
+    fn set(
+        &mut self,
+        debuggee: &str,
+        start_cmd: Vec<&str>,
+        // terminal is not used since `set_to_exec_dbgee` build the command for `dbgee run` by clap's utility,
+        _terminal: &mut dyn DebuggerTerminal,
+    ) -> Result<()> {
+        set_to_exec_dgeee(debuggee, start_cmd)
     }
 
-    fn unset(&mut self, unset_opts: &UnsetOpts) -> Result<()> {
-        unset_from_exec_dbgee(unset_opts)
+    fn unset(&mut self, debuggee: &str) -> Result<()> {
+        unset_from_exec_dbgee(debuggee)
     }
 
     fn build_attach_commandline(&self) -> Result<Vec<String>> {
@@ -281,12 +335,14 @@ impl StopAndWritePidDebugger {
 }
 
 impl Debugger for StopAndWritePidDebugger {
-    fn run(&mut self, run_opts: &RunOpts, _terminal: &mut dyn DebuggerTerminal) -> Result<Pid> {
-        let debuggee_abspath = get_path_of_unset_debuggee(&run_opts.debuggee)?;
-        let debuggee_pid = run_and_stop_dbgee(
-            &debuggee_abspath,
-            run_opts.debuggee_args.iter().map(String::as_str),
-        )?;
+    fn run(
+        &mut self,
+        debuggee: &str,
+        args: Vec<&str>,
+        _terminal: &mut dyn DebuggerTerminal,
+    ) -> Result<Pid> {
+        let debuggee_abspath = get_path_of_unset_debuggee(debuggee)?;
+        let debuggee_pid = run_and_stop_dbgee(&debuggee_abspath, args.into_iter())?;
         log::info!("The debuggee process is paused. Atach a debugger to it by PID.");
         log::info!(
             "PID: {}. It's also written to /tmp/dbgee_pid as a plain text number.",
@@ -297,12 +353,18 @@ impl Debugger for StopAndWritePidDebugger {
         Ok(debuggee_pid)
     }
 
-    fn set(&mut self, set_opts: &SetOpts, terminal: &mut dyn DebuggerTerminal) -> Result<()> {
-        set_to_exec_dgeee(set_opts, terminal)
+    fn set(
+        &mut self,
+        debuggee: &str,
+        start_cmd: Vec<&str>,
+        // terminal is not used since `set_to_exec_dbgee` build the command for `dbgee run` by clap's utility,
+        _terminal: &mut dyn DebuggerTerminal,
+    ) -> Result<()> {
+        set_to_exec_dgeee(debuggee, start_cmd)
     }
 
-    fn unset(&mut self, unset_opts: &UnsetOpts) -> Result<()> {
-        unset_from_exec_dbgee(unset_opts)
+    fn unset(&mut self, debuggee: &str) -> Result<()> {
+        unset_from_exec_dbgee(debuggee)
     }
 
     fn build_attach_commandline(&self) -> Result<Vec<String>> {
@@ -351,7 +413,12 @@ impl PythonDebugger {
 }
 
 impl Debugger for PythonDebugger {
-    fn run(&mut self, run_opts: &RunOpts, terminal: &mut dyn DebuggerTerminal) -> Result<Pid> {
+    fn run(
+        &mut self,
+        debuggee: &str,
+        args: Vec<&str>,
+        terminal: &mut dyn DebuggerTerminal,
+    ) -> Result<Pid> {
         self.port = Some(5679);
         let debugger_args: Vec<&str> = vec![
             "-m",
@@ -359,10 +426,10 @@ impl Debugger for PythonDebugger {
             "--wait-for-client",
             "--listen",
             "5679",
-            &run_opts.debuggee,
+            debuggee,
         ]
         .into_iter()
-        .chain(run_opts.debuggee_args.iter().map(|s| s.as_str()))
+        .chain(args.into_iter())
         .collect();
 
         let pid = launch_debugger_server(&self.python_command, &debugger_args)?;
@@ -376,11 +443,16 @@ impl Debugger for PythonDebugger {
         Ok(pid)
     }
 
-    fn set(&mut self, _set_opts: &SetOpts, _terminal: &mut dyn DebuggerTerminal) -> Result<()> {
+    fn set(
+        &mut self,
+        _debuggee: &str,
+        _start_cmd: Vec<&str>,
+        _terminal: &mut dyn DebuggerTerminal,
+    ) -> Result<()> {
         bail!("set is not implemented yet for Python");
     }
 
-    fn unset(&mut self, _unset_opts: &UnsetOpts) -> Result<()> {
+    fn unset(&mut self, _debuggee: &str) -> Result<()> {
         bail!("unset is not implemented yet for Python");
     }
 
@@ -442,25 +514,24 @@ fn run_and_stop_dbgee<'a>(debuggee: &'a str, args: impl Iterator<Item = &'a str>
     Ok(debuggee_pid)
 }
 
-fn set_to_exec_dgeee(set_opts: &SetOpts, _terminal: &mut dyn DebuggerTerminal) -> Result<()> {
+fn set_to_exec_dgeee(debuggee: &str, start_cmd: Vec<&str>) -> Result<()> {
+    // Build the `$ dbgee run` command to launch the debugger from the clap's get_matches()
     let clap_matches = Opts::clap().get_matches();
     let run_command = build_run_command(&clap_matches)?;
-    wrap_debuggee_binary(&set_opts.debuggee, &run_command)?;
+    wrap_debuggee_binary(debuggee, &run_command)?;
 
-    if set_opts.start_cmd.is_empty() {
+    if start_cmd.is_empty() {
         return Ok(());
     }
 
-    let mut child = Command::new(&set_opts.start_cmd[0])
-        .args(&set_opts.start_cmd[1..])
-        .spawn()?;
+    let mut child = Command::new(start_cmd[0]).args(&start_cmd[1..]).spawn()?;
     let _ = child.wait()?;
 
-    unwrap_debuggee_binary(&set_opts.debuggee)
+    unwrap_debuggee_binary(debuggee)
 }
 
-fn unset_from_exec_dbgee(unset_opts: &UnsetOpts) -> Result<()> {
-    unwrap_debuggee_binary(&unset_opts.debuggee)
+fn unset_from_exec_dbgee(debuggee: &str) -> Result<()> {
+    unwrap_debuggee_binary(debuggee)
 }
 
 fn get_path_of_unset_debuggee(debuggee: &str) -> Result<String> {
