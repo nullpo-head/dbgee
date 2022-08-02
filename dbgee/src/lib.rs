@@ -8,7 +8,7 @@ use file_helper::is_executable;
 
 use std::str;
 
-use anyhow::{anyhow, bail, Result};
+use anyhow::{anyhow, bail, Context, Result};
 use nix::sys::wait;
 use nix::unistd::Pid;
 use structopt::StructOpt;
@@ -111,27 +111,31 @@ pub struct UnsetOpts {
 
     /// Specify the debugger used for the previous 'set' command, which will be used for 'unset'.
     /// Default is 'auto'. To explicitly specify it, choose one of 'gdb', 'lldb', 'dlv', 'stop-and-write-pid' and 'python'.
-    #[structopt(short, long, default_value("auto"))]
-    pub debugger: String,
+    #[structopt(short, long)]
+    pub debugger: Option<DebuggerOptValues>,
 }
 
 #[derive(Debug, StructOpt)]
 pub struct AttachOpts {
-    /// Debugger to launch. Choose one of "auto", "gdb", "lldb", "dlv", "stop-and-write-pid" and "python".
+    /// Debugger to launch. Choose one of "gdb", "lldb", "dlv", "stop-and-write-pid" and "python".
     ///
     /// stop-and-write-pid: Stops the debuggee, and prints the debuggee's PID.
     /// dbgee writes the PID to /tmp/dbgee_pid. If stderr is a tty,
     /// dbgee outputs the PID to stderr as well.
-    ///
-    /// python: Use 'debugpy' module to debug Python in VSCode. Currently, 'python' ignores -t option and uses
+    /// debugpy: Use 'debugpy' module to debug Python in VSCode. Currently, 'python' ignores -t option and uses
     /// only VSCode.
-    #[structopt(short, long, default_value("auto"))]
-    pub debugger: String,
+    ///
+    /// If not given, dbgee tries to automatically detect the right debugger; use dlv if the debuggee
+    /// file is compiled by Go, use gdb (on linux) / lldb (on macOS) for other compiled binary, use
+    /// python if the debuggee is a Python file, and exits with error otherwise.
+    ///
+    #[structopt(short, long, possible_values(DebuggerOptValues::VARIANTS))]
+    pub debugger: Option<DebuggerOptValues>,
 
     /// Terminal to launch the debugger in.
     ///
-    /// auto (default): choose 'vscode' if dbgee is running in an integrated terminal,
-    /// choose 'tmuxp' otherwise.
+    /// If not given, the default values is 'vscode' if dbgee is running in an integrated terminal,
+    /// or 'tmuxp' otherwise.
     ///
     /// tmuxw: Opens a new tmux window in last active tmux session,
     /// launches a debugger there, and has the debugger attach to the debuggee.
@@ -142,31 +146,35 @@ pub struct AttachOpts {
     ///
     /// vscode: Open nothing in the terminal, and wait for VSCode to connect to the debugger
     ///
-    #[structopt(
-        short,
-        long,
-        possible_values(DebuggerTerminalOpt::VARIANTS),
-        default_value("auto")
-    )]
-    pub terminal: DebuggerTerminalOpt,
+    #[structopt(short, long, possible_values(TerminalOptValues::VARIANTS))]
+    pub terminal: Option<TerminalOptValues>,
 }
 
 #[derive(Debug, EnumString, EnumVariantNames)]
 #[strum(serialize_all = "kebab-case")]
-pub enum DebuggerTerminalOpt {
-    Auto,
+pub enum TerminalOptValues {
     Tmuxw,
     Tmuxp,
     Vscode,
 }
 
+#[derive(Debug, Clone, Copy, EnumString, EnumVariantNames)]
+#[strum(serialize_all = "kebab-case")]
+pub enum DebuggerOptValues {
+    Gdb,
+    Lldb,
+    Dlv,
+    StopAndWritePid,
+    Debugpy,
+}
+
 pub fn run(opts: Opts) -> Result<i32> {
-    let (debuggee, debugger_name) = match opts.command {
+    let (debuggee, debugger_type) = match opts.command {
         Subcommand::Run(ref run_opts) => (&run_opts.debuggee, &run_opts.attach_opts.debugger),
         Subcommand::Set(ref set_opts) => (&set_opts.debuggee, &set_opts.attach_opts.debugger),
         Subcommand::Unset(ref unset_opts) => (&unset_opts.debuggee, &unset_opts.debugger),
     };
-    let mut debugger = build_debugger(debugger_name, debuggee)?;
+    let mut debugger = build_debugger(debugger_type, debuggee)?;
 
     if !is_executable(debuggee) {
         bail!(
@@ -183,7 +191,7 @@ pub fn run(opts: Opts) -> Result<i32> {
                 run_opts.debuggee_args.iter().map(String::as_str).collect(),
                 debugger_terminal.as_mut(),
             )?;
-            Ok(wait_until_exit(pid)?)
+            Ok(wait_pid_exit(pid)?)
         }
         Subcommand::Set(set_opts) => {
             let mut debugger_terminal = build_debugger_terminal(&set_opts.attach_opts.terminal);
@@ -201,29 +209,35 @@ pub fn run(opts: Opts) -> Result<i32> {
     }
 }
 
-fn build_debugger(debugger: &str, debuggee: &str) -> Result<Box<dyn Debugger>> {
+fn build_debugger(
+    debugger: &Option<DebuggerOptValues>,
+    debuggee: &str,
+) -> Result<Box<dyn Debugger>> {
     match debugger {
-        "auto" => detect_debugger(debuggee),
-        "gdb" => Ok(Box::new(GdbDebugger::build()?)),
-        "lldb" => Ok(Box::new(LldbDebugger::build()?)),
-        "dlv" => Ok(Box::new(DelveDebugger::new()?)),
-        "stop-and-write-pid" => Ok(Box::new(StopAndWritePidDebugger::new())),
-        "debugpy" => Ok(Box::new(PythonDebugger::new()?)),
-        _ => Err(anyhow!("Unsupported debugger: {}", debugger)),
+        None => detect_debugger(debuggee).context("Failed to detect the right debugger"),
+        Some(debugger_type) => match *debugger_type {
+            DebuggerOptValues::Gdb => Ok(Box::new(GdbDebugger::build()?)),
+            DebuggerOptValues::Lldb => Ok(Box::new(LldbDebugger::build()?)),
+            DebuggerOptValues::Dlv => Ok(Box::new(DelveDebugger::new()?)),
+            DebuggerOptValues::StopAndWritePid => Ok(Box::new(StopAndWritePidDebugger::new())),
+            DebuggerOptValues::Debugpy => Ok(Box::new(PythonDebugger::new()?)),
+        },
     }
 }
 
 fn detect_debugger(debuggee: &str) -> Result<Box<dyn Debugger>> {
+    use DebuggerOptValues::*;
+
     let debuggers = if cfg!(target_os = "linux") {
         // prefer gdb to lldb  in Linux
-        ["dlv", "gdb", "debugpy", "stop-and-write-pid"]
+        [Dlv, Gdb, Debugpy, StopAndWritePid]
     } else {
         // macOS
         // prefer lldb
-        ["dlv", "lldb", "debugpy", "stop-and-write-pid"]
+        [Dlv, Lldb, Debugpy, StopAndWritePid]
     };
     for debugger in debuggers.iter() {
-        let candidate = build_debugger(debugger, debuggee);
+        let candidate = build_debugger(&Some(*debugger), debuggee);
         if candidate.is_err() {
             continue;
         }
@@ -235,19 +249,21 @@ fn detect_debugger(debuggee: &str) -> Result<Box<dyn Debugger>> {
     bail!("Could not automatically detect the proper debugger for the given debuggee")
 }
 
-fn build_debugger_terminal(action: &DebuggerTerminalOpt) -> Box<dyn DebuggerTerminal> {
-    match action {
-        DebuggerTerminalOpt::Auto => build_debugger_terminal(&detect_debugger_terminal()),
-        DebuggerTerminalOpt::Tmuxw => Box::new(Tmux::new(TmuxLayout::NewWindow)),
-        DebuggerTerminalOpt::Tmuxp => Box::new(Tmux::new(TmuxLayout::NewPane)),
-        DebuggerTerminalOpt::Vscode => Box::new(VsCode::new()),
+fn build_debugger_terminal(terminal: &Option<TerminalOptValues>) -> Box<dyn DebuggerTerminal> {
+    match terminal {
+        None => build_debugger_terminal(&Some(detect_debugger_terminal())),
+        Some(terminal) => match *terminal {
+            TerminalOptValues::Tmuxw => Box::new(Tmux::new(TmuxLayout::NewWindow)),
+            TerminalOptValues::Tmuxp => Box::new(Tmux::new(TmuxLayout::NewPane)),
+            TerminalOptValues::Vscode => Box::new(VsCode::new()),
+        },
     }
 }
 
-fn detect_debugger_terminal() -> DebuggerTerminalOpt {
+fn detect_debugger_terminal() -> TerminalOptValues {
     match is_in_vscode_term() {
-        true => DebuggerTerminalOpt::Vscode,
-        false => DebuggerTerminalOpt::Tmuxp,
+        true => TerminalOptValues::Vscode,
+        false => TerminalOptValues::Tmuxp,
     }
 }
 
@@ -288,7 +304,8 @@ fn is_in_vscode_term() -> bool {
     inner().unwrap_or(false)
 }
 
-fn wait_until_exit(pid: Pid) -> Result<i32> {
+/// wait for pid to exit and returns its exit code
+fn wait_pid_exit(pid: Pid) -> Result<i32> {
     let exitcode_signaled = 130;
     loop {
         match wait::waitpid(pid, None) {
