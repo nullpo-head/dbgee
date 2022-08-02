@@ -343,13 +343,7 @@ impl Debugger for StopAndWritePidDebugger {
     ) -> Result<Pid> {
         let debuggee_abspath = get_path_of_unset_debuggee(debuggee)?;
         let debuggee_pid = run_and_stop_dbgee(&debuggee_abspath, args.into_iter())?;
-        log::info!("The debuggee process is paused. Atach a debugger to it by PID.");
-        log::info!(
-            "PID: {}. It's also written to /tmp/dbgee_pid as a plain text number.",
-            debuggee_pid.as_raw()
-        );
-        let mut pid_file = File::create("/tmp/dbgee_pid")?;
-        write!(pid_file, "{}", debuggee_pid.as_raw())?;
+        write_pid_file(debuggee_pid).context("Failed to write the pid file")?;
         Ok(debuggee_pid)
     }
 
@@ -378,6 +372,17 @@ impl Debugger for StopAndWritePidDebugger {
     fn is_debuggee_surely_supported(&self, _debuggee: &str) -> Result<bool> {
         Ok(true)
     }
+}
+
+fn write_pid_file(pid: Pid) -> Result<()> {
+    log::info!("The debuggee process is paused. Atach a debugger to it by PID.");
+    log::info!(
+        "PID: {}. It's also written to /tmp/dbgee_pid as a plain text number.",
+        pid.as_raw()
+    );
+    let mut pid_file = File::create("/tmp/dbgee_pid")?;
+    write!(pid_file, "{}", pid.as_raw())?;
+    Ok(())
 }
 
 pub struct PythonDebugger {
@@ -695,7 +700,7 @@ fn fork_exec_stop<T: AsRef<str>>(debuggee_cmd: &[T]) -> Result<Pid> {
         unistd::ForkResult::Parent {
             child: debuggee_pid,
         } => {
-            // Wait for the debuggee to be stopped by SIGSTOP, which is triggered by PTRACE_ATTACH
+            // Wait for the debuggee to be stopped by SIGTRAP, which is triggered by PTRACE_ATTACH
             match wait::waitpid(debuggee_pid, None)
                 .with_context(|| "Unexpected error. Waiting for SIGTRAP failed.")?
             {
