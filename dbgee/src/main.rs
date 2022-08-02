@@ -16,6 +16,7 @@ fn main() {
 
     match run(opts) {
         Ok(exit_status) => {
+            log::debug!("exiting with {}", exit_status);
             std::process::exit(exit_status);
         }
         Err(e) => {
