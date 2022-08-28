@@ -231,7 +231,7 @@ fn build_attach_request_fifo_path() -> Option<String> {
     if !sock_name.ends_with(".sock") {
         return None;
     }
-    let mut path = format!("{}-for-", vscode_communication_path_prefix());
+    let mut path = format!("{}-debuggee-for-", vscode_communication_path_prefix());
     path.extend(sock_name[0..sock_name.len() - 5].chars().into_iter());
     Some(path)
 }
