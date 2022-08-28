@@ -10,6 +10,9 @@ use std::{
 use anyhow::Result;
 use nix::{sys::signal, unistd};
 
+/// FIFO prefix path of VSCode instances for test
+static VSCODE_COMMUNICATION_FIFO_PATH_PREFIX_OVERRIDE: &str = "/tmp/dbgee-integration-test";
+
 #[test]
 fn test_run_pid_debugger() -> Result<()> {
     set_fake_commands_path()?;
@@ -179,10 +182,24 @@ fn test_run_debuggee_which_is_set_before() -> Result<()> {
 fn test_run_for_vscode() -> Result<()> {
     set_fake_commands_path()?;
     let dbgee_pathbuf = get_dbgee_bin_path();
+    let fifo_path = format!(
+        "{}-debuggees",
+        VSCODE_COMMUNICATION_FIFO_PATH_PREFIX_OVERRIDE
+    );
 
     // launch `dbgee`
     let lang_testbin = get_lang_testbin_path("python")?;
-    let debuggee_args = vec!["run", "-t", "vscode", "--", &lang_testbin, "arg0", "arg1"];
+    let debuggee_args = vec![
+        "--vscode-fifo-prefix",
+        VSCODE_COMMUNICATION_FIFO_PATH_PREFIX_OVERRIDE,
+        "run",
+        "-t",
+        "vscode",
+        "--",
+        &lang_testbin,
+        "arg0",
+        "arg1",
+    ];
     let mut dbgee_command = Command::new(dbgee_pathbuf.as_os_str());
     dbgee_command
         .args(debuggee_args)
@@ -197,15 +214,11 @@ fn test_run_for_vscode() -> Result<()> {
     }
     let dbgee = dbgee_command.spawn().unwrap();
 
-    // read from the fifo in a thread with timtout because it may block if there's a bug
+    // read from the fifo in a thread with timeout because it may block if there's a bug
     let (sender, receiver) = std::sync::mpsc::channel();
     std::thread::spawn(move || {
-        let fifo_path = "/tmp/dbgee-vscode-debuggees";
-        let _ = unistd::mkfifo(fifo_path, nix::sys::stat::Mode::S_IRWXU);
-        let mut file = fs::File::open(fifo_path).unwrap();
-        //let json = fs::read_to_string("/tmp/dbgee-vscode-debuggees").unwrap();
-        let mut json = String::new();
-        file.read_to_string(&mut json).unwrap();
+        let _ = unistd::mkfifo(fifo_path.as_str(), nix::sys::stat::Mode::S_IRWXU);
+        let json = fs::read_to_string(fifo_path).unwrap();
         let _ = sender.send(json);
     });
     let json = receiver

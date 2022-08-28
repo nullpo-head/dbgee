@@ -19,6 +19,8 @@ use crate::debugger::{
     DelveDebugger, GdbDebugger, LldbDebugger, PythonDebugger, StopAndWritePidDebugger,
 };
 
+pub use debugger_terminal::set_vscode_communication_fifo_path_prefix;
+
 #[derive(Debug, StructOpt)]
 /// The zero-configuration debuggee for debuggers.
 ///
@@ -33,6 +35,11 @@ use crate::debugger::{
 pub struct Opts {
     #[structopt(short, long)]
     pub log_level: Option<LogLevel>,
+
+    /// Prefix to override the path of VSCode communication FIFO paths. Mainly for integration tests.
+    #[structopt(long, hidden = true)]
+    pub vscode_fifo_prefix: Option<String>,
+
     #[structopt(subcommand)]
     pub command: Subcommand,
 }
