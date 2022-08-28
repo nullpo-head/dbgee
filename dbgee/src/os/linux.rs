@@ -312,12 +312,14 @@ impl HookCondition for HookSourceCondition {
             .with_context(|| format!("Failed to get the exe path of pid({})", pid))?;
         debug!("checking --hook-source against exe_path: {:?}", &exe_path);
 
-        any_in_dwarf_decl_file(&self.source_paths, &exe_path).with_context(|| {
-            format!(
-                "Failed to find source_paths from decl_file({:?})",
-                &exe_path
-            )
-        })
+        any_in_dwarf_decl_file(&exe_path, |path| self.source_paths.contains(path)).with_context(
+            || {
+                format!(
+                    "Failed to find source_paths from decl_file({:?})",
+                    &exe_path
+                )
+            },
+        )
     }
 }
 
@@ -326,9 +328,12 @@ fn get_exe_path(pid: Pid) -> Result<PathBuf> {
         .with_context(|| format!("Failed to read link /proc/{}/exe", pid.as_raw()))
 }
 
-/// Returns true if the dwarf file of `exe_path` contains any file paths in the given `file_set`.
-/// `any_in_dwarf_decl_file` does path comparison, resolving any path to canonicalized paths.
-fn any_in_dwarf_decl_file(file_set: &HashSet<PathBuf>, exe_path: &Path) -> Result<bool> {
+/// Returns true if the dwarf file of `exe_path` contains any sources for which `predicate` returns true.
+/// Note `any_in_dwarf_decl_file` does path comparison, resolving any path to canonicalized paths.
+fn any_in_dwarf_decl_file<F>(exe_path: &Path, mut predicate: F) -> Result<bool>
+where
+    F: FnMut(&Path) -> bool,
+{
     let mmap = Mmap::new(&exe_path).with_context(|| format!("Failed to mmap {:?}", &exe_path))?;
     {
         let buf = mmap.get();
@@ -377,7 +382,7 @@ fn any_in_dwarf_decl_file(file_set: &HashSet<PathBuf>, exe_path: &Path) -> Resul
         };
 
         if header.file_names().iter().any(|file_entry| {
-            let inner = || -> Result<bool> {
+            let mut inner = || -> Result<bool> {
                 let file_path = match path_resolver
                     .resolve_file(&dwarf, &unit, header, file_entry)
                     .context("Failed to resolve a file path")?
@@ -386,7 +391,7 @@ fn any_in_dwarf_decl_file(file_set: &HashSet<PathBuf>, exe_path: &Path) -> Resul
                     None => return Ok(false),
                 };
                 trace!("-- source file {:?}", &file_path);
-                Ok(file_set.contains(&file_path))
+                Ok(predicate(file_path.as_path()))
             };
             match inner() {
                 Ok(res) => res,
