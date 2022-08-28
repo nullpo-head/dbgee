@@ -149,6 +149,11 @@ pub struct HookOpts {
     /// A process binary must include DWARF debug information, which compilers usually emit for a debug build.
     hook_source: Option<Vec<String>>,
 
+    #[structopt(short = "i", long)]
+    /// Attach to a process which is built from any files under the given directory.
+    /// A process binary must include DWARF debug information, which compilers usually emit for a debug build.
+    hook_source_dir: Option<PathBuf>,
+
     #[structopt(flatten)]
     attach_opts: AttachOpts,
 }

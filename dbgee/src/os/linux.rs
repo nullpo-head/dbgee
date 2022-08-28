@@ -13,7 +13,7 @@ use anyhow::{anyhow, bail, Context, Result};
 use log::{debug, info, trace};
 use nix::{
     errno::Errno,
-    libc::{PTRACE_EVENT_CLONE, PTRACE_EVENT_FORK},
+    libc::{PTRACE_EVENT_CLONE, PTRACE_EVENT_FORK, PTRACE_EVENT_VFORK},
     sys::{
         mman::{mmap, MapFlags, ProtFlags},
         ptrace, signal, wait,
@@ -30,8 +30,12 @@ use crate::{
 pub fn run_hook(hook_opts: HookOpts) -> Result<()> {
     let terminal = &mut build_debugger_terminal(&hook_opts.attach_opts.terminal);
 
-    let hook_conditions = build_hook_conditions(hook_opts.hook_executable, hook_opts.hook_source)
-        .context("failed to build hook conditions")?;
+    let hook_conditions = build_hook_conditions(
+        hook_opts.hook_executable,
+        hook_opts.hook_source,
+        hook_opts.hook_source_dir,
+    )
+    .context("failed to build hook conditions")?;
 
     let start_command_pid = spawn_traced_command(hook_opts.command, hook_opts.command_args)
         .context("Failed to spawn the traced command")?;
@@ -53,7 +57,9 @@ pub fn run_hook(hook_opts: HookOpts) -> Result<()> {
         if pid == start_command_pid {
             ptrace::setoptions(
                 pid,
-                ptrace::Options::PTRACE_O_TRACEFORK | ptrace::Options::PTRACE_O_TRACECLONE,
+                ptrace::Options::PTRACE_O_TRACEFORK
+                    | ptrace::Options::PTRACE_O_TRACECLONE
+                    | ptrace::Options::PTRACE_O_TRACEVFORK,
             )
             .context("Failed to set a ptrace option")?;
         }
@@ -146,7 +152,8 @@ fn wait_sigtrap() -> Result<Option<Pid>> {
             }
             // A tracee forked. Let both of the parent and the child continue.
             wait::WaitStatus::PtraceEvent(pid, _, PTRACE_EVENT_FORK)
-            | wait::WaitStatus::PtraceEvent(pid, _, PTRACE_EVENT_CLONE) => {
+            | wait::WaitStatus::PtraceEvent(pid, _, PTRACE_EVENT_CLONE)
+            | wait::WaitStatus::PtraceEvent(pid, _, PTRACE_EVENT_VFORK) => {
                 trace!("forked: {}", pid);
                 let child_pid = ptrace::getevent(pid)
                     .with_context(|| anyhow!("Failed to get event of pid {}", pid))?;
@@ -243,10 +250,12 @@ trait HookCondition {
 ///
 /// * `hook_executable` - Attach to a process with the specified path
 /// * `hook_source` - Attach to a process which is built from any of the given comma-separated source files.
+/// * `hook_source_dir` - Attach to a process which is built from any files under the given directory.
 ///
 fn build_hook_conditions(
     hook_executable: Option<PathBuf>,
     hook_source: Option<Vec<String>>,
+    hook_source_dir: Option<PathBuf>,
 ) -> Result<Vec<Box<dyn HookCondition>>> {
     let mut conditions: Vec<Box<dyn HookCondition>> = vec![];
     if let Some(path) = hook_executable {
@@ -259,7 +268,13 @@ fn build_hook_conditions(
         conditions.push(Box::new(
             build_hook_source_condition(source_paths)
                 .context("Failed to build hook source condition")?,
-        ))
+        ));
+    }
+    if let Some(source_dir) = hook_source_dir {
+        conditions.push(Box::new(
+            build_hook_source_dir_condition(source_dir)
+                .context("Failed to build hook source directory condition")?,
+        ));
     }
     Ok(conditions)
 }
@@ -320,6 +335,43 @@ impl HookCondition for HookSourceCondition {
                 )
             },
         )
+    }
+}
+
+struct HookSourceDirCondition {
+    source_dir: PathBuf,
+}
+
+fn build_hook_source_dir_condition(source_dir: PathBuf) -> Result<HookSourceDirCondition> {
+    let canonicalized = source_dir
+        .canonicalize()
+        .with_context(|| format!("Failed to canonicalize {:?}", &source_dir))?;
+    Ok(HookSourceDirCondition {
+        source_dir: canonicalized,
+    })
+}
+
+impl HookCondition for HookSourceDirCondition {
+    fn hooks(&self, pid: Pid) -> Result<bool> {
+        let exe_path = get_exe_path(pid)
+            .with_context(|| format!("Failed to get the exe path of pid({})", pid))?;
+        debug!(
+            "checking --hook-source-dir against exe_path: {:?}",
+            &exe_path
+        );
+
+        any_in_dwarf_decl_file(&exe_path, |path| {
+            debug!("comparing {:?} with {:?}", &self.source_dir, path);
+            let is_triggered = path.starts_with(&self.source_dir);
+            debug!("--- result: {}", is_triggered);
+            is_triggered
+        })
+        .with_context(|| {
+            format!(
+                "Failed to find source_paths from decl_file({:?})",
+                &exe_path
+            )
+        })
     }
 }
 
