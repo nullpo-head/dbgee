@@ -2,12 +2,19 @@ use crate::debugger::{AttachInformationKey, Debugger};
 
 use anyhow::{anyhow, bail, Context, Result};
 use nix::unistd;
+use once_cell::sync::OnceCell;
 use std::{
     fs::File,
     io::Write,
     path::{Path, PathBuf},
     process::Command,
 };
+
+/// Prefix of the fifo path to communicate with VScode.
+const VSCODE_COMMUNICATION_FIFO_PATH_PREFIX: &str = "/tmp/dbgee-vscode";
+/// Override the prefix of the fifo path to communicate with VScode.
+/// Used to override the path for test.
+static VSCODE_COMMUNICATION_FIFO_PATH_PREFIX_OVERRIDE: OnceCell<String> = OnceCell::<String>::new();
 
 pub trait DebuggerTerminal {
     fn name(&self) -> &str;
@@ -97,17 +104,22 @@ impl DebuggerTerminal for Tmux {
     }
 }
 
+/// struct for VSCode that implements `DebuggerTerminal` trait.
 pub struct VsCode {
+    /// Path to a FIFO which a VSCode instance will connect if the user manually starts a debug session with dbgee
     attach_information_fifo_path: String,
+    /// Path to a FIFO which a VSCode instance always listens to. Sending a request to this FIFO path will trigger
+    /// a debug session in the VSCode instance without user interaction inside VSCode.
     attach_request_fifo_path: Option<String>,
+    /// Version of the message protocol in a semantic version format
     protocol_version: &'static str,
 }
 
 impl VsCode {
     pub fn new() -> VsCode {
         VsCode {
-            attach_information_fifo_path: "/tmp/dbgee-vscode-debuggees".to_owned(),
-            attach_request_fifo_path: VsCode::build_attach_request_fifo_path(),
+            attach_information_fifo_path: build_attach_information_fifo_path(),
+            attach_request_fifo_path: build_attach_request_fifo_path(),
             protocol_version: "1.1.0",
         }
     }
@@ -200,24 +212,36 @@ impl VsCode {
         log::info!("Requesting VSCode to attach. You can also manually attach by starting debug with \"Dbgee:\" launch configs.");
         self.send_json_to_vscode(json, fifo_path, None)
     }
+}
 
-    fn build_attach_request_fifo_path() -> Option<String> {
-        // **
-        // Heuristics:
-        // Each VSCode window seems to have one unique UNIX socket for Git IPC.
-        // It can be retrieved by $VSCODE_GIT_IPC_HANDLE in shell sessions in the integrated terminal.
-        // Use it to distinguish VSCode's windows
-        // **
-        let vscode_git_ipc_handle = std::env::var_os("VSCODE_GIT_IPC_HANDLE")?;
-        let pathbuf = PathBuf::from(vscode_git_ipc_handle);
-        let sock_name = pathbuf.file_name()?.to_str()?;
-        if !sock_name.ends_with(".sock") {
-            return None;
-        }
-        let mut path = "/tmp/dbgee-vscode-debuggee-for-".to_owned();
-        path.extend(sock_name[0..sock_name.len() - 5].chars().into_iter());
-        Some(path)
+fn build_attach_information_fifo_path() -> String {
+    format!("{}-debuggees", vscode_communication_path_prefix())
+}
+
+fn build_attach_request_fifo_path() -> Option<String> {
+    // **
+    // Heuristics:
+    // Each VSCode window seems to have one unique UNIX socket for Git IPC.
+    // It can be retrieved by $VSCODE_GIT_IPC_HANDLE in shell sessions in the integrated terminal.
+    // Use it to distinguish VSCode's windows
+    // **
+    let vscode_git_ipc_handle = std::env::var_os("VSCODE_GIT_IPC_HANDLE")?;
+    let pathbuf = PathBuf::from(vscode_git_ipc_handle);
+    let sock_name = pathbuf.file_name()?.to_str()?;
+    if !sock_name.ends_with(".sock") {
+        return None;
     }
+    let mut path = format!("{}-for-", vscode_communication_path_prefix());
+    path.extend(sock_name[0..sock_name.len() - 5].chars().into_iter());
+    Some(path)
+}
+
+fn vscode_communication_path_prefix() -> &'static str {
+    let prefix = VSCODE_COMMUNICATION_FIFO_PATH_PREFIX_OVERRIDE
+        .get()
+        .map(|s| s.as_str())
+        .unwrap_or(VSCODE_COMMUNICATION_FIFO_PATH_PREFIX);
+    prefix
 }
 
 impl DebuggerTerminal for VsCode {
@@ -234,4 +258,10 @@ impl DebuggerTerminal for VsCode {
             Ok(())
         })
     }
+}
+
+/// Set the prefix path of the VSCode communication FIFO paths. This is mainly a function for
+/// integration test
+pub fn set_vscode_communication_fifo_path_prefix(prefix: String) -> Result<(), String> {
+    VSCODE_COMMUNICATION_FIFO_PATH_PREFIX_OVERRIDE.set(prefix)
 }

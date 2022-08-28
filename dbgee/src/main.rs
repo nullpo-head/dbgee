@@ -1,5 +1,5 @@
 use colored::*;
-use dbgee::{run, LogLevel, Opts};
+use dbgee::{run, set_vscode_communication_fifo_path_prefix, LogLevel, Opts};
 use nix::unistd;
 use structopt::StructOpt;
 
@@ -13,6 +13,11 @@ use std::{
 fn main() {
     let opts = Opts::from_args();
     init_logger(&opts.log_level);
+
+    if let Some(ref fifo_prefix) = opts.vscode_fifo_prefix {
+        set_vscode_communication_fifo_path_prefix(fifo_prefix.clone())
+            .expect("Failed to set the VSCode fifo prefix");
+    }
 
     match run(opts) {
         Ok(exit_status) => {
