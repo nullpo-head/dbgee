@@ -212,6 +212,7 @@ pub enum DebuggerOptValues {
 }
 
 pub fn run(opts: Opts) -> Result<i32> {
+    #[cfg(target_os = "linux")]
     if let Subcommand::Hook(hook_opts) = opts.command {
         return run_hook(hook_opts).map(|_| 0);
     }
@@ -220,7 +221,8 @@ pub fn run(opts: Opts) -> Result<i32> {
         Subcommand::Run(ref run_opts) => (&run_opts.debuggee, &run_opts.attach_opts.debugger),
         Subcommand::Set(ref set_opts) => (&set_opts.debuggee, &set_opts.attach_opts.debugger),
         Subcommand::Unset(ref unset_opts) => (&unset_opts.debuggee, &unset_opts.debugger),
-        Subcommand::Hook(_) => unreachable!(),
+        #[cfg(target_os = "linux")]
+        Subcommand::Hook(_) => unreachable!(), // already handled
     };
     let mut debugger = build_debugger(debugger_type, debuggee)?;
 
@@ -254,7 +256,8 @@ pub fn run(opts: Opts) -> Result<i32> {
             debugger.unset(&unset_opts.debuggee)?;
             Ok(0)
         }
-        Subcommand::Hook(_) => unreachable!(),
+        #[cfg(target_os = "linux")]
+        Subcommand::Hook(_) => unreachable!(), // already handled
     }
 }
 
