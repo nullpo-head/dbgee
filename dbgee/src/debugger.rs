@@ -36,7 +36,7 @@ pub trait Debugger {
     ///
     /// * `debuggee` - Path to the debuggee file
     /// * `args` - Command line arguments of `debuggee`
-    /// * `terminal` - Terminal where debuggee launches
+    /// * `terminal` - Terminal where debugger launches
     ///
     fn run(
         &mut self,
@@ -52,7 +52,7 @@ pub trait Debugger {
     /// * `debuggee` - Path to the debuggee file
     /// * `start_cmd` - If `len()` > 0, spawn `start_cmd` after wrapping the debuggee file.
     ///    After `start_cmd` completes, `debuggee` will be automatically restored.
-    /// * `terminal` - Terminal where debuggee launches
+    /// * `terminal` - Terminal where debugger launches
     ///
     fn set(
         &mut self,
@@ -61,13 +61,31 @@ pub trait Debugger {
         terminal: &mut dyn DebuggerTerminal,
     ) -> Result<()>;
 
-    /// Restore the debuggee file which was replaced with the wrapper script by `set`.
+    /// Restores the debuggee file which was replaced with the wrapper script by `set`.
     ///
     /// # Arguments
     ///
     /// * `debuggee` - Path to the debuggee file, that is, path to the wrapper script
     ///
     fn unset(&mut self, debuggee: &str) -> Result<()>;
+
+    /// Attaches to the process of `pid`
+    ///
+    /// # Arguments
+    ///
+    /// * `pid` - Pid of the process to attach
+    /// * `debuggee` - Path to the debuggee file
+    /// * `terminal` - Terminal where debugger launches
+    ///
+    #[allow(unused_variables)]
+    fn attach(
+        &mut self,
+        pid: Pid,
+        debuggee: &str,
+        terminal: &mut dyn DebuggerTerminal,
+    ) -> Result<()> {
+        unimplemented!()
+    }
 
     fn build_attach_commandline(&self) -> Result<Vec<String>>;
     fn build_attach_information(&self) -> Result<HashMap<AttachInformationKey, String>>;
@@ -172,6 +190,19 @@ impl Debugger for GdbCompatibleDebugger {
         unset_from_exec_dbgee(debuggee)
     }
 
+    fn attach(
+        &mut self,
+        pid: Pid,
+        debuggee: &str,
+        terminal: &mut dyn DebuggerTerminal,
+    ) -> Result<()> {
+        let debuggee_abspath = get_path_of_unset_debuggee(debuggee)?;
+        self.debuggee_pid = Some(pid);
+        self.debuggee_path = Some(debuggee_abspath);
+        terminal.open(self)?;
+        Ok(())
+    }
+
     fn build_attach_commandline(&self) -> Result<Vec<String>> {
         (self.commandline_builder)(
             self.debuggee_pid
@@ -260,13 +291,42 @@ impl Debugger for DelveDebugger {
         .collect();
 
         if cfg!(target_os = "macos") {
-            log::info!("delve outputs logs from lldb-server to stderr on macos, which cannot be suppressed");
+            show_macos_dlv_log_warning();
         }
 
         let pid = launch_debugger_server("dlv", &debugger_args)?;
         terminal.open(self)?;
 
         Ok(pid)
+    }
+
+    fn attach(
+        &mut self,
+        pid: Pid,
+        _debuggee: &str,
+        terminal: &mut dyn DebuggerTerminal,
+    ) -> Result<()> {
+        self.port = Some(5679);
+        let pid_string = pid.as_raw().to_string();
+        let debugger_args: Vec<&str> = vec![
+            "attach",
+            "--headless",
+            "--log-dest",
+            "/dev/null",
+            "--api-version=2",
+            "--listen",
+            "localhost:5679",
+            pid_string.as_str(),
+        ];
+
+        if cfg!(target_os = "macos") {
+            show_macos_dlv_log_warning();
+        }
+
+        launch_debugger_server("dlv", &debugger_args).context("Failed to launch dlv")?;
+        terminal.open(self).context("Failed to open the terminal")?;
+
+        Ok(())
     }
 
     fn set(
@@ -326,6 +386,12 @@ impl Debugger for DelveDebugger {
     }
 }
 
+fn show_macos_dlv_log_warning() {
+    log::info!(
+        "delve outputs logs from lldb-server to stderr on macos, which cannot be suppressed"
+    );
+}
+
 pub struct StopAndWritePidDebugger;
 
 impl StopAndWritePidDebugger {
@@ -359,6 +425,16 @@ impl Debugger for StopAndWritePidDebugger {
 
     fn unset(&mut self, debuggee: &str) -> Result<()> {
         unset_from_exec_dbgee(debuggee)
+    }
+
+    fn attach(
+        &mut self,
+        pid: Pid,
+        _debuggee: &str,
+        _terminal: &mut dyn DebuggerTerminal,
+    ) -> Result<()> {
+        write_pid_file(pid).context("Failed to write the pid file")?;
+        Ok(())
     }
 
     fn build_attach_commandline(&self) -> Result<Vec<String>> {
@@ -700,7 +776,7 @@ fn fork_exec_stop<T: AsRef<str>>(debuggee_cmd: &[T]) -> Result<Pid> {
         unistd::ForkResult::Parent {
             child: debuggee_pid,
         } => {
-            // Wait for the debuggee to be stopped by SIGTRAP, which is triggered by PTRACE_ATTACH
+            // Wait for the debuggee to be stopped by SIGSTOP, which is triggered by PTRACE_ATTACH
             match wait::waitpid(debuggee_pid, None)
                 .with_context(|| "Unexpected error. Waiting for SIGTRAP failed.")?
             {
