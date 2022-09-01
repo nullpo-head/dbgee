@@ -1,7 +1,7 @@
 {
     "options": {
         "preset": {
-            "name": "conventionalchangelog",
+            "name": "preset",
             "types": [
                 {
                     "type": "feat",
@@ -9,9 +9,19 @@
                     "section": "Features"
                 },
                 {
+                    "type": "feat",
+                    "scope": "vsc",
+                    "hidden": true
+                },
+                {
                     "type": "fix",
                     "scope": "cli",
                     "section": "Bug Fixes"
+                },
+                {
+                    "type": "fix",
+                    "scope": "vsc",
+                    "hidden": true
                 },
                 {
                     "type": "chore",

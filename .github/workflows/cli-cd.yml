@@ -61,10 +61,6 @@ jobs:
           cd dbgee
           cargo build --release
 
-      - name: Test git commit
-        run: |
-          echo '${{ steps.changelog.outputs.clean_changelog }}'
-
   #      - name: Compress
   #        if: github.event.inputs.skips_publish != 'yes'
   #        run: |
@@ -117,6 +113,12 @@ jobs:
           git-push: false
           config-file-path: .github/workflows/cli-conventional-commit-config.json
 
+      # Reset the tag that `bump-version` created just now so that the next bump step
+      # can make the real tag change
+      - name: Rest the new git tag
+        run: |
+          git tag -d ${{ steps.bump-version.outputs.tag }}
+
       # This will update Cargo.lock
       - name: Build
         run: |
@@ -140,6 +142,11 @@ jobs:
           skip-commit: true # ${{ github.event.inputs.skips_version_commit == 'yes' }}
           skip-ci: false
           config-file-path: .github/workflows/cli-conventional-commit-config.json
+
+      - name: Test git commit
+        run: |
+          echo '${{ steps.changelog.outputs.clean_changelog }}'
+
 #  test:
 #    name: Test
 #    runs-on: ${{ matrix.os }}
