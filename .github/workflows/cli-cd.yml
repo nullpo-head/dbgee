@@ -1,9 +1,24 @@
-name: Publish
+name: Publish CLI
 
 on:
-  push:
-    tags:
-      - "cli-v*"
+  workflow_dispatch:
+    inputs:
+      is_prerelease:
+        description: "Whether this is a pre-release (yes/no)"
+        required: false
+        default: "no"
+      skips_version_bump:
+        description: "Whether to skip automatic version bump (yes/no)"
+        required: false
+        default: "no"
+      skips_version_commit:
+        description: "Whether to skip the version commit (yes/no)"
+        required: false
+        default: "no"
+      skips_publish:
+        description: "Whether to skip publishing the release assets (yes/no)"
+        required: false
+        default: "no"
 
 env:
   CARGO_TERM_COLOR: always
@@ -41,31 +56,62 @@ jobs:
           cd dbgee
           cargo test --verbose
 
+      # Only bump the version in Cargo.toml and don't make the release commit yet
+      # so that the next Cargo build updates Cargo.lock and the release commit includes
+      # the updated Cargo.lock file.
+      - name: Bump the version
+        id: bump-version
+        uses: TriPSs/conventional-changelog-action@v3
+        with:
+          version-file: ./dbgee/Cargo.toml
+          version-path: package.version
+          tag-prefix: cli-v
+          release-count: "0"
+          skip-version-file: ${{ github.event.inputs.skips_version_bump == 'yes' }}
+          skip-commit: true
+          git-push: false
+          config-file-path: ./.github/cli-conventional-commit-config.js
+
       - name: Build
         run: |
           cd dbgee
           cargo build --release
 
+      - name: Make the release commit
+        id: changelog
+        uses: TriPSs/conventional-changelog-action@v3
+        with:
+          github-token: ${{ secrets.github_token }}
+          version-file: ./dbgee/Cargo.toml
+          version-path: package.version
+          tag-prefix: cli-v
+          skip-on-empty: false
+          git-user-name: "github-actions[bot]"
+          git-user-email: "41898282+github-actions[bot]@users.noreply.github.com"
+          release-count: "0"
+          skip-version-file: ${{ github.event.inputs.skips_version_bump == 'yes' }}
+          skip-commit: yes # ${{ github.event.inputs.skips_version_commit == 'yes' }}
+          skip-ci: false
+          config-file-path: ./.github/cli-conventional-commit-config.js
+
+      - name: Test git commit
+        run: |
+          echo '${{ steps.changelog.outputs.clean_changelog }}'
+
       - name: Compress
+        if: github.event.inputs.skips_publish != 'yes'
         run: |
           cd dbgee/target/release
           tar cvzf dbgee-${{ env.OS_RELEASE_NAME }}-x64.tar.gz dbgee
 
-      - name: Read the commit message and use it as a body of the new release
-        id: read_release
-        shell: bash
-        run: |
-          release="$(git log $(echo ${{ github.ref }} | grep -o 'cli-v.*') -1 --pretty=format:%B)"  # Use the commit message as the release message
-          echo "RELEASE_BODY<<EOF" >> $GITHUB_ENV
-          echo "$release" >> $GITHUB_ENV
-          echo "EOF" >> $GITHUB_ENV
-
       - name: Upload Binaries to Release
         uses: svenstaro/upload-release-action@v2
+        if: github.event.inputs.skips_publish != 'yes'
         with:
           repo_token: ${{ secrets.GITHUB_TOKEN }}
           file: dbgee/target/release/dbgee-${{ env.OS_RELEASE_NAME }}-x64.tar.gz
           tag: ${{ github.ref }}
           overwrite: true
+          prerelease: ${{ github.event.inputs.is_prerelease == 'yes' }}
           body: |
-            ${{ env.RELEASE_BODY }}
+            ${{ steps.changelog.outputs.clean_changelog }}
