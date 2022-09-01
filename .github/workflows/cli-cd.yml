@@ -97,6 +97,11 @@ jobs:
             dbgee/target
           key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
 
+      # needed by TriPSs/conventional-changelog-action@v3 for the config-file-path option
+      - name: install conventional-changelog-conventionalcommits
+        run: |
+          npm install -g conventional-changelog-conventionalcommits
+
       # Only bump the version in Cargo.toml and don't make the release commit yet
       # so that the next Cargo build updates Cargo.lock and the release commit includes
       # the updated Cargo.lock file.
@@ -111,7 +116,7 @@ jobs:
           #skip-version-file: ${{ github.event.inputs.skips_version_bump == 'yes' }}
           skip-commit: true
           git-push: false
-          config-file-path: .github/workflows/cli-conventional-commit-config.json
+          config-file-path: .github/workflows/cli-conventional-commit-config.js
 
       # Reset the tag that `bump-version` created just now so that the next bump step
       # can make the real tag change
@@ -141,7 +146,7 @@ jobs:
           # skip-version-file: ${{ github.event.inputs.skips_version_bump == 'yes' }}
           skip-commit: true # ${{ github.event.inputs.skips_version_commit == 'yes' }}
           skip-ci: false
-          config-file-path: .github/workflows/cli-conventional-commit-config.json
+          config-file-path: .github/workflows/cli-conventional-commit-config.js
 
       - name: Test git commit
         run: |
