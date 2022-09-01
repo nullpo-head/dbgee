@@ -116,7 +116,7 @@ jobs:
           #skip-version-file: ${{ github.event.inputs.skips_version_bump == 'yes' }}
           skip-commit: true
           git-push: false
-          config-file-path: .github/workflows/cli-conventional-commit-config.js
+          #config-file-path: .github/workflows/cli-conventional-commit-config.js
 
       # Reset the tag that `bump-version` created just now so that the next bump step
       # can make the real tag change
@@ -146,7 +146,7 @@ jobs:
           # skip-version-file: ${{ github.event.inputs.skips_version_bump == 'yes' }}
           skip-commit: true # ${{ github.event.inputs.skips_version_commit == 'yes' }}
           skip-ci: false
-          config-file-path: .github/workflows/cli-conventional-commit-config.js
+          #config-file-path: .github/workflows/cli-conventional-commit-config.js
 
       - name: Test git commit
         run: |
