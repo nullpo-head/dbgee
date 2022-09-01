@@ -1,6 +1,8 @@
 name: Publish CLI
 
 on:
+  push:
+    branches: [ci/cd-improvement]
   workflow_dispatch:
     inputs:
       is_prerelease:
@@ -27,6 +29,7 @@ jobs:
   build:
     name: Publish binaries
     runs-on: ${{ matrix.os }}
+    needs: [bump-version]
     defaults:
       run:
         shell: bash
@@ -37,6 +40,8 @@ jobs:
 
     steps:
       - uses: actions/checkout@v2
+        with:
+          ref: ${{ needs.bump-version.outputs.tag }}
       - uses: actions/cache@v2
         with:
           path: |
@@ -51,10 +56,50 @@ jobs:
         run: |
           echo "OS_RELEASE_NAME=$(uname | tr '[A-Z]' '[a-z]')" >> $GITHUB_ENV
 
-      - name: Run tests
+      - name: Build
         run: |
           cd dbgee
-          cargo test --verbose
+          cargo build --release
+
+      - name: Test git commit
+        run: |
+          echo '${{ steps.changelog.outputs.clean_changelog }}'
+
+  #      - name: Compress
+  #        if: github.event.inputs.skips_publish != 'yes'
+  #        run: |
+  #          cd dbgee/target/release
+  #          tar cvzf dbgee-${{ env.OS_RELEASE_NAME }}-x64.tar.gz dbgee
+  #
+  #      - name: Upload Binaries to Release
+  #        uses: svenstaro/upload-release-action@v2
+  #        if: github.event.inputs.skips_publish != 'yes'
+  #        with:
+  #          repo_token: ${{ secrets.GITHUB_TOKEN }}
+  #          file: dbgee/target/release/dbgee-${{ env.OS_RELEASE_NAME }}-x64.tar.gz
+  #          tag: ${{ github.ref }}
+  #          overwrite: true
+  #          prerelease: ${{ github.event.inputs.is_prerelease == 'yes' }}
+  #          body: |
+  #            ${{ steps.changelog.outputs.clean_changelog }}
+
+  bump-version:
+    name: Bump the version
+    runs-on: ubuntu-latest
+    #needs: [test]
+    outputs:
+      tag: ${{ steps.changelog.outputs.tag }}
+      clean_changelog: ${{ steps.changelog.outputs.clean_changelog }}
+
+    steps:
+      - uses: actions/checkout@v2
+      - uses: actions/cache@v2
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            dbgee/target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
 
       # Only bump the version in Cargo.toml and don't make the release commit yet
       # so that the next Cargo build updates Cargo.lock and the release commit includes
@@ -63,15 +108,16 @@ jobs:
         id: bump-version
         uses: TriPSs/conventional-changelog-action@v3
         with:
-          version-file: ./dbgee/Cargo.toml
+          version-file: dbgee/Cargo.toml
           version-path: package.version
           tag-prefix: cli-v
           release-count: "0"
-          skip-version-file: ${{ github.event.inputs.skips_version_bump == 'yes' }}
+          #skip-version-file: ${{ github.event.inputs.skips_version_bump == 'yes' }}
           skip-commit: true
           git-push: false
-          config-file-path: ./.github/cli-conventional-commit-config.js
+          config-file-path: .github/workflows/cli-conventional-commit-config.json
 
+      # This will update Cargo.lock
       - name: Build
         run: |
           cd dbgee
@@ -81,37 +127,42 @@ jobs:
         id: changelog
         uses: TriPSs/conventional-changelog-action@v3
         with:
-          github-token: ${{ secrets.github_token }}
-          version-file: ./dbgee/Cargo.toml
+          #github-token: ${{ secrets.github_token }}
+          git-push: false
+          version-file: dbgee/Cargo.toml
           version-path: package.version
           tag-prefix: cli-v
           skip-on-empty: false
           git-user-name: "github-actions[bot]"
           git-user-email: "41898282+github-actions[bot]@users.noreply.github.com"
           release-count: "0"
-          skip-version-file: ${{ github.event.inputs.skips_version_bump == 'yes' }}
-          skip-commit: yes # ${{ github.event.inputs.skips_version_commit == 'yes' }}
+          # skip-version-file: ${{ github.event.inputs.skips_version_bump == 'yes' }}
+          skip-commit: true # ${{ github.event.inputs.skips_version_commit == 'yes' }}
           skip-ci: false
-          config-file-path: ./.github/cli-conventional-commit-config.js
-
-      - name: Test git commit
-        run: |
-          echo '${{ steps.changelog.outputs.clean_changelog }}'
-
-      - name: Compress
-        if: github.event.inputs.skips_publish != 'yes'
-        run: |
-          cd dbgee/target/release
-          tar cvzf dbgee-${{ env.OS_RELEASE_NAME }}-x64.tar.gz dbgee
-
-      - name: Upload Binaries to Release
-        uses: svenstaro/upload-release-action@v2
-        if: github.event.inputs.skips_publish != 'yes'
-        with:
-          repo_token: ${{ secrets.GITHUB_TOKEN }}
-          file: dbgee/target/release/dbgee-${{ env.OS_RELEASE_NAME }}-x64.tar.gz
-          tag: ${{ github.ref }}
-          overwrite: true
-          prerelease: ${{ github.event.inputs.is_prerelease == 'yes' }}
-          body: |
-            ${{ steps.changelog.outputs.clean_changelog }}
+          config-file-path: .github/workflows/cli-conventional-commit-config.json
+#  test:
+#    name: Test
+#    runs-on: ${{ matrix.os }}
+#    defaults:
+#      run:
+#        shell: bash
+#
+#    strategy:
+#      matrix:
+#        os: [ubuntu-latest, macos-latest]
+#
+#    steps:
+#      - uses: actions/checkout@v2
+#      - uses: actions/cache@v2
+#        with:
+#          path: |
+#            ~/.cargo/registry
+#            ~/.cargo/git
+#            dbgee/target
+#          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+#
+#      - name: Run tests
+#        run: |
+#          cd dbgee
+#          cargo test --verbose
+#
