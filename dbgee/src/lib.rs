@@ -7,10 +7,9 @@ use debugger::Debugger;
 use debugger_terminal::{DebuggerTerminal, Tmux, TmuxLayout, VsCode};
 use file_helper::is_executable;
 use log::debug;
-#[cfg(target_os = "linux")]
-use os::run_hook;
+use os::{is_any_hook_condition_set, run_hook};
 
-use std::{path::PathBuf, str};
+use std::str;
 
 use anyhow::{anyhow, bail, Context, Result};
 use nix::sys::wait;
@@ -64,26 +63,28 @@ pub enum Subcommand {
     Run(RunOpts),
     Set(SetOpts),
     Unset(UnsetOpts),
-    #[cfg(target_os = "linux")]
-    Hook(HookOpts),
 }
 
 /// Launches the debuggee, and attaches the specified debugger to it.
 #[derive(Debug, StructOpt)]
 #[structopt(
-    usage = "dbgee run [OPTIONS] -- <debuggee> [args-for-debuggee]...",
+    usage = "dbgee run [OPTIONS] -- <command> [args-for-command]...",
     rename_all = "kebab"
 )]
 pub struct RunOpts {
-    /// Path to the debuggee process
+    /// Path to the process to launch. The debugger attaches to this <command>
+    /// unless any hook conditions are given.
     #[structopt()]
-    pub debuggee: String,
+    pub command: String,
 
     #[structopt(name = "args")]
-    pub debuggee_args: Vec<String>,
+    pub command_args: Vec<String>,
 
     #[structopt(flatten)]
     attach_opts: AttachOpts,
+
+    #[structopt(flatten)]
+    hook_opts: os::HookOpts,
 }
 
 // Positional arguments of SetOpts. `debugger::set_exec_to_dbgee` needs this constants
@@ -126,36 +127,6 @@ pub struct UnsetOpts {
     /// Default is 'auto'. To explicitly specify it, choose one of 'gdb', 'lldb', 'dlv', 'stop-and-write-pid' and 'python'.
     #[structopt(short, long)]
     pub debugger: Option<DebuggerOptValues>,
-}
-
-/// Run a command and attach a debugger to its child process which triggered the specified hook condition.
-#[cfg_attr(not(target_os = "linux"), allow(unused))]
-#[derive(Debug, StructOpt)]
-#[structopt(rename_all = "kebab")]
-pub struct HookOpts {
-    /// During running this command, any child process which triggered the specified hook condition will be attached.
-    #[structopt()]
-    pub command: String,
-
-    #[structopt(name = "args")]
-    pub command_args: Vec<String>,
-
-    #[structopt(short = "e", long)]
-    /// Attach to a process with the specified path
-    hook_executable: Option<PathBuf>,
-
-    #[structopt(short = "s", long)]
-    /// Attach to a process which is built from any of the given comma-separated source files.
-    /// A process binary must include DWARF debug information, which compilers usually emit for a debug build.
-    hook_source: Option<Vec<String>>,
-
-    #[structopt(short = "i", long)]
-    /// Attach to a process which is built from any files under the given directory.
-    /// A process binary must include DWARF debug information, which compilers usually emit for a debug build.
-    hook_source_dir: Option<PathBuf>,
-
-    #[structopt(flatten)]
-    attach_opts: AttachOpts,
 }
 
 #[derive(Debug, StructOpt)]
@@ -212,38 +183,35 @@ pub enum DebuggerOptValues {
 }
 
 pub fn run(opts: Opts) -> Result<i32> {
-    #[cfg(target_os = "linux")]
-    if let Subcommand::Hook(hook_opts) = opts.command {
-        return run_hook(hook_opts).map(|_| 0);
-    }
-
-    let (debuggee, debugger_type) = match opts.command {
-        Subcommand::Run(ref run_opts) => (&run_opts.debuggee, &run_opts.attach_opts.debugger),
-        Subcommand::Set(ref set_opts) => (&set_opts.debuggee, &set_opts.attach_opts.debugger),
-        Subcommand::Unset(ref unset_opts) => (&unset_opts.debuggee, &unset_opts.debugger),
-        #[cfg(target_os = "linux")]
-        Subcommand::Hook(_) => unreachable!(), // already handled
-    };
-    let mut debugger = build_debugger(debugger_type, debuggee)?;
-
-    if !is_executable(debuggee) {
-        bail!(
-            "the debugee (path: '{}') is not an executable file.",
-            debuggee
-        );
-    }
-
     match opts.command {
         Subcommand::Run(run_opts) => {
+            bail_if_not_executable(&run_opts.command)?;
+
+            if is_any_hook_condition_set(&run_opts.hook_opts) {
+                run_hook(
+                    run_opts.command,
+                    run_opts.command_args,
+                    run_opts.hook_opts,
+                    run_opts.attach_opts,
+                )
+                .context("Running with hook conditions failed")?;
+                return Ok(0);
+            }
+
+            let mut debugger = build_debugger(&run_opts.attach_opts.debugger, &run_opts.command)?;
             let mut debugger_terminal = build_debugger_terminal(&run_opts.attach_opts.terminal);
             let pid = debugger.run(
-                &run_opts.debuggee,
-                run_opts.debuggee_args.iter().map(String::as_str).collect(),
+                &run_opts.command,
+                run_opts.command_args.iter().map(String::as_str).collect(),
                 debugger_terminal.as_mut(),
             )?;
             Ok(wait_pid_exit(pid)?)
         }
+
         Subcommand::Set(set_opts) => {
+            bail_if_not_executable(&set_opts.debuggee)?;
+
+            let mut debugger = build_debugger(&set_opts.attach_opts.debugger, &set_opts.debuggee)?;
             let mut debugger_terminal = build_debugger_terminal(&set_opts.attach_opts.terminal);
             debugger.set(
                 &set_opts.debuggee,
@@ -252,13 +220,25 @@ pub fn run(opts: Opts) -> Result<i32> {
             )?;
             Ok(0)
         }
+
         Subcommand::Unset(unset_opts) => {
+            bail_if_not_executable(&unset_opts.debuggee)?;
+
+            let mut debugger = build_debugger(&unset_opts.debugger, &unset_opts.debuggee)?;
             debugger.unset(&unset_opts.debuggee)?;
             Ok(0)
         }
-        #[cfg(target_os = "linux")]
-        Subcommand::Hook(_) => unreachable!(), // already handled
     }
+}
+
+fn bail_if_not_executable(debuggee: &str) -> Result<()> {
+    if !is_executable(debuggee) {
+        bail!(
+            "the debugee (path: '{}') is not an executable file.",
+            debuggee
+        );
+    }
+    Ok(())
 }
 
 fn build_debugger(
