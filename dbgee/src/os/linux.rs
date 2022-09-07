@@ -21,14 +21,53 @@ use nix::{
     unistd::Pid,
 };
 use object::{Object, ObjectSection};
+use structopt::StructOpt;
 
 use crate::{
-    build_debugger, build_debugger_terminal, file_helper::get_abspath, ErrorLogger, HookOpts,
+    build_debugger, build_debugger_terminal, file_helper::get_abspath, AttachOpts, ErrorLogger,
 };
 
-/// Run the action for subcommand `hook`.
-pub fn run_hook(hook_opts: HookOpts) -> Result<()> {
-    let terminal = &mut build_debugger_terminal(&hook_opts.attach_opts.terminal);
+#[derive(Debug, StructOpt)]
+#[structopt(rename_all = "kebab")]
+pub struct HookOpts {
+    #[structopt(short = "e", long)]
+    /// Attach not to <command> itself, but to a descendant process whose executable file is the specified path.
+    hook_executable: Option<PathBuf>,
+
+    #[structopt(short = "s", long)]
+    /// Attach not to <command> itself, but to a descendant process which is built from any of the given source files.
+    /// A process binary must include DWARF debug information, which compilers usually emit for a debug build.
+    hook_source: Option<Vec<String>>,
+
+    #[structopt(short = "i", long)]
+    /// Attach not to <command> itself, but to a descendant process which is built from any files under the given directory.
+    /// A process binary must include DWARF debug information, which compilers usually emit for a debug build.
+    hook_source_dir: Option<PathBuf>,
+}
+
+pub fn is_any_hook_condition_set(hook_opts: &HookOpts) -> bool {
+    let HookOpts {
+        hook_executable,
+        hook_source,
+        hook_source_dir,
+    } = hook_opts;
+    [
+        hook_executable.is_some(),
+        hook_source.is_some(),
+        hook_source_dir.is_some(),
+    ]
+    .iter()
+    .any(|cond| *cond)
+}
+
+/// Run the action for subcommand `run` with hook conditions.
+pub fn run_hook(
+    command: String,
+    command_args: Vec<String>,
+    hook_opts: HookOpts,
+    attach_opts: AttachOpts,
+) -> Result<()> {
+    let terminal = &mut build_debugger_terminal(&attach_opts.terminal);
 
     let hook_conditions = build_hook_conditions(
         hook_opts.hook_executable,
@@ -37,7 +76,7 @@ pub fn run_hook(hook_opts: HookOpts) -> Result<()> {
     )
     .context("failed to build hook conditions")?;
 
-    let start_command_pid = spawn_traced_command(hook_opts.command, hook_opts.command_args)
+    let start_command_pid = spawn_traced_command(command, command_args)
         .context("Failed to spawn the traced command")?;
 
     // wait for a process triggering the hook condition
@@ -89,7 +128,7 @@ pub fn run_hook(hook_opts: HookOpts) -> Result<()> {
         )
     })?;
     let mut debugger = build_debugger(
-        &hook_opts.attach_opts.debugger,
+        &attach_opts.debugger,
         hooked_command_path
             .to_str()
             .ok_or_else(|| anyhow!("executable path is not a valid utf-8 str"))?,
