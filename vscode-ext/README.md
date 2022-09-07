@@ -15,6 +15,10 @@ or when your program is launched by some script.
 
 <img alt="demo image" src="vscode-ext/images/DbgeeRunInVsCode.gif" width="850px">
 
+### (Linux only) Find and attach to a process compiled from source files in the current directory, from all descendant processes of the given command
+
+<img alt="demo image" src="vscode-ext/images/DbgeeHookInVsCode.gif" width="850px">
+
 ### Configure your program to wait for a debug session, no matter by what means it is started
 
 <img alt="demo image" src="vscode-ext/images/DbgeeSetInVsCode.gif" width="850px">

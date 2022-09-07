@@ -11,13 +11,31 @@ In addition, Dbgee frees you from the hassle of writing `launch.json` for VSCode
 
 ## Demos
 
-The concept of Dbgee should be new and unfamiliar to you, so here are some demos to get you started.
+Since the concept of Dbgee may be new to you, so here are some demos.
 
 ### Debug your program with zero configuration in Visual Studio Code
 
+```shell
+dbgee run -- ./cmd
+```
+
 <img alt="demo image" src="vscode-ext/images/DbgeeRunInVsCode.gif" width="850px">
 
+### Find and attach to a process compiled from source files in the current directory, from all descendant processes of the given command
+
+**Linux only**
+
+```shell
+dbgee run --hook-source-dir . -- ./any_run_script
+```
+
+<img alt="demo image" src="vscode-ext/images/DbgeeHookInVsCode.gif" width="850px">
+
 ### Configure your program to launch a debugger when it runs
+
+```shell
+dbgee set command
+```
 
 <img alt="demo image" src="vscode-ext/images/DbgeeSetInVsCode.gif" width="850px">
 
