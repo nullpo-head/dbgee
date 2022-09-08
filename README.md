@@ -67,7 +67,7 @@ There are two components, `dbgee` command and the optional VSCode extension.
 #### Linux
 
 ```shell
-curl -L -O https://github.com/nullpo-head/dbgee/releases/download/cli-v0.3.0/dbgee-linux-x64.tar.gz
+curl -L -O https://github.com/nullpo-head/dbgee/releases/download/cli-v0.5.0/dbgee-linux-x64.tar.gz
 tar xvf dbgee-linux-x64.tar.gz
 mv dbgee /usr/local/bin/ # Or anywhere in the PATH
 ```
@@ -75,7 +75,7 @@ mv dbgee /usr/local/bin/ # Or anywhere in the PATH
 #### macOS
 
 ```shell
-curl -L -O https://github.com/nullpo-head/dbgee/releases/download/cli-v0.3.0/dbgee-darwin-x64.tar.gz
+curl -L -O https://github.com/nullpo-head/dbgee/releases/download/cli-v0.5.0/dbgee-darwin-x64.tar.gz
 tar xvf dbgee-darwin-x64.tar.gz
 mv dbgee /usr/local/bin/ # Or anywhere in the PATH
 ```
