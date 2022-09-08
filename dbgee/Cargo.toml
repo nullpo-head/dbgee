@@ -1,6 +1,6 @@
 [package]
 name = "dbgee"
-version = "0.4.0"
+version = "0.5.0"
 authors = ["Takaya Saeki <abc.tkys+pub@gmail.com>"]
 edition = "2018"
 
